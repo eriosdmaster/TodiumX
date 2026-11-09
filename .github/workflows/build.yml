@@ -101,9 +101,8 @@ jobs:
           cp "$(which php)" bin/php/php
           chmod +x bin/php/php
           # php.ini
-          PHP_INI_DIR=$(php -i | grep "Scan this dir" | awk -F': ' '{print $2}')
-          if [ -z "$PHP_INI_DIR" ]; then PHP_INI_DIR=$(php -i | grep "Loaded Configuration File" | awk -F': ' '{print $2}' | xargs dirname); fi
-          cp "$PHP_INI_DIR/php.ini" bin/php/php.ini 2>/dev/null || php -i | grep "php.ini" | head -1 | awk -F'=> ' '{print $2}' | xargs cp -t bin/php/ 2>/dev/null || true
+          PHP_INI="$(php -r 'echo php_ini_loaded_file();')"
+          if [ -n "$PHP_INI" ] && [ -f "$PHP_INI" ]; then cp "$PHP_INI" bin/php/php.ini; fi
           # SSL
           cp /etc/ssl/openssl.cnf bin/php/extras/ssl/openssl.cnf 2>/dev/null || true
           cp /etc/ssl/certs/ca-certificates.crt bin/php/extras/ssl/cacert.pem 2>/dev/null || true
@@ -113,13 +112,9 @@ jobs:
               cp "$lib" bin/php/ 2>/dev/null || true
             fi
           done
-          # Also copy common extension .so files
-          php -m | grep -v '^$' | while read ext; do
-            EXT_FILE=$(php -i 2>/dev/null | grep -i "extension_dir" | head -1 | awk -F'=> ' '{print $2}' | xargs -I{} find {} -name "${ext}.so" 2>/dev/null | head -1)
-            if [ -n "$EXT_FILE" ] && [ -f "$EXT_FILE" ]; then
-              cp "$EXT_FILE" bin/php/ 2>/dev/null || true
-            fi
-          done
+          # Also copy the extension .so files
+          EXT_DIR="$(php -r 'echo ini_get("extension_dir");')"
+          if [ -d "$EXT_DIR" ]; then cp "$EXT_DIR"/*.so bin/php/ 2>/dev/null || true; fi
           ls -la bin/php/
 
       - name: Copy native library
