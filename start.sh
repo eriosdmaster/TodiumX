@@ -31,11 +31,11 @@ done
 chmod +x "$PHP_BIN" 2>/dev/null || true
 
 # Native library path (optional, for FFI)
-export LD_LIBRARY_PATH="$ROOT_DIR/bin/native:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$PHP_DIR:$ROOT_DIR/bin/native:${LD_LIBRARY_PATH:-}"
 export DYLD_LIBRARY_PATH="$ROOT_DIR/bin/native:${DYLD_LIBRARY_PATH:-}"
 
 # PHAR or source entry
-PHAR_FILE="$ROOT_DIR/RaspberryX.phar"
+PHAR_FILE="$ROOT_DIR/TodiumX.phar"
 SRC_ENTRY="$ROOT_DIR/src/raspberry/RaspberryX.php"
 
 if [[ -f "$PHAR_FILE" ]]; then
@@ -43,7 +43,7 @@ if [[ -f "$PHAR_FILE" ]]; then
 elif [[ -f "$SRC_ENTRY" ]]; then
     exec "$PHP_BIN" -c "$PHP_INI" "$SRC_ENTRY"
 else
-    echo "[ERROR] Neither RaspberryX.phar nor source entry point found." >&2
+    echo "[ERROR] Neither TodiumX.phar nor source entry point found." >&2
     echo "Expected: $PHAR_FILE or $SRC_ENTRY" >&2
     exit 1
 fi

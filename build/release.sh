@@ -47,7 +47,7 @@ echo "Native library built: $BUILT"
 cd "$ROOT_DIR"
 if command -v php &> /dev/null; then
   php -d phar.readonly=0 build/make-server.php
-  PHAR="$ROOT_DIR/RaspberryX.phar"
+  PHAR="$ROOT_DIR/TodiumX.phar"
   if [[ -f "$PHAR" ]]; then
     echo "PHAR built: $PHAR"
     # copy native lib into bin/native for distribution
@@ -55,7 +55,7 @@ if command -v php &> /dev/null; then
     cp "$BUILT" "$ROOT_DIR/bin/native/"
     echo "Copied native lib to bin/native/"
   else
-    echo "PHAR build failed (RaspberryX.phar not found)"
+    echo "PHAR build failed (TodiumX.phar not found)"
   fi
 else
   echo "PHP not found; skipping PHAR build. Run 'composer make-server' on a machine with PHP 8.5+."

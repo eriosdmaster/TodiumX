@@ -23,11 +23,11 @@ for %%F in (
     )
 )
 
-if exist "RaspberryX.phar" (
-    "%RASPBERRY_PHP_DIR%\php.exe" -c "%RASPBERRY_PHP_DIR%\php.ini" -r "require 'phar://RaspberryX.phar/src/raspberry/RaspberryX.php';"
+if exist "TodiumX.phar" (
+    "%RASPBERRY_PHP_DIR%\php.exe" -c "%RASPBERRY_PHP_DIR%\php.ini" -r "require 'phar://TodiumX.phar/src/raspberry/RaspberryX.php';"
 ) else (
     if not exist "src\raspberry\RaspberryX.php" (
-        echo [ERROR] RaspberryX.phar and the source entry point are missing.
+        echo [ERROR] TodiumX.phar and the source entry point are missing.
         popd
         pause
         exit /b 1

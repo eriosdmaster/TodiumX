@@ -93,9 +93,9 @@ try{
 
     ksort($files);
 
-    $outputPath = Path::join($root, "RaspberryX.phar");
+    $outputPath = Path::join($root, "TodiumX.phar");
 
-    $temporaryPath = Path::join($root, ".RaspberryX-build-" . bin2hex(random_bytes(6)) . ".phar");
+    $temporaryPath = Path::join($root, ".TodiumX-build-" . bin2hex(random_bytes(6)) . ".phar");
 
     $phar = new Phar($temporaryPath);
     $phar->startBuffering();

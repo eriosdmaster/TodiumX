@@ -97,52 +97,103 @@ jobs:
           ini-values: phar.readonly=0
           coverage: none
 
-      # ext-webrtc (NetherNet) is not available in stock PHP. axolotl-pm/PHP-Binaries ships a PHP 8.5 (ZTS)
-      # build with webrtc compiled in. It has no ext-ffi, so ffi is built below against the same PHP version.
-      - name: Download PHP 8.5 runtime with ext-webrtc
-        run: |
-          mkdir -p bin
-          curl -fsSL -o php-runtime.tar.gz "https://github.com/axolotl-pm/PHP-Binaries/releases/download/pm5-php-8.5-latest/PHP-8.5-Linux-x86_64-PM5.tar.gz"
-          tar -xzf php-runtime.tar.gz -C bin
-          rm php-runtime.tar.gz
-          ls bin/php7/bin
-          bin/php7/bin/php -v
-          bin/php7/bin/php -m | grep -qx webrtc
+      # ext-webrtc (NetherNet) is not in stock PHP, so PHP itself is built here: PHP 8.5 (ZTS) with ext-ffi built in,
+      # plus ext-webrtc (axolotl-pm/ext-webrtc) on top of libdatachannel. The result is cached.
+      - name: Cache PHP stack
+        id: php-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/php-stack
+          key: php-stack-ubuntu24-php8.5.12-dc0.24.5-webrtc0.3.1-v1
 
-      - name: Build ext-ffi for that PHP (ZTS)
+      - name: Install build dependencies
+        if: steps.php-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libffi-dev build-essential autoconf bison re2c pkg-config
-          PHPV="$(bin/php7/bin/php -r 'echo PHP_VERSION;')"
-          echo "Building ext-ffi for PHP $PHPV"
-          curl -fsSL -o php-src.tar.xz "https://www.php.net/distributions/php-${PHPV}.tar.xz"
-          tar -xJf php-src.tar.xz
-          cd "php-${PHPV}"
-          ./configure --prefix="$PWD/../php-headers" --disable-all --enable-zts --disable-cgi --disable-phpdbg
+          sudo apt-get install -y build-essential autoconf bison re2c pkg-config cmake git patchelf \
+            libssl-dev libffi-dev zlib1g-dev libonig-dev
+
+      - name: Build libdatachannel
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          STACK="$GITHUB_WORKSPACE/.cache/php-stack"
+          mkdir -p "$STACK" build-tmp
+          git clone --depth 1 --branch v0.24.5 --recurse-submodules --shallow-submodules https://github.com/paullouisageneau/libdatachannel build-tmp/libdatachannel
+          cmake -S build-tmp/libdatachannel -B build-tmp/libdatachannel/build \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$STACK/libdatachannel" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=ON \
+            -DNO_EXAMPLES=ON -DNO_TESTS=ON -DNO_MEDIA=ON
+          cmake --build build-tmp/libdatachannel/build --parallel "$(nproc)"
+          cmake --install build-tmp/libdatachannel/build
+          ls -la "$STACK/libdatachannel/lib"
+
+      - name: Build PHP 8.5 (ZTS, ffi)
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          STACK="$GITHUB_WORKSPACE/.cache/php-stack"
+          PHPV=8.5.12
+          cd build-tmp
+          if curl -fsSL -o php-src.tar.xz "https://www.php.net/distributions/php-${PHPV}.tar.xz"; then
+            tar -xJf php-src.tar.xz
+            cd "php-${PHPV}"
+          else
+            curl -fsSL -o php-src.tar.gz "https://github.com/php/php-src/archive/refs/tags/php-${PHPV}.tar.gz"
+            tar -xzf php-src.tar.gz
+            cd "php-src-php-${PHPV}"
+            ./buildconf --force
+          fi
+          ./configure --prefix="$STACK/php" --disable-all --enable-zts --enable-cli \
+            --disable-cgi --disable-phpdbg --enable-phar --enable-ctype --enable-tokenizer \
+            --enable-filter --enable-posix --enable-pcntl --enable-sockets --enable-mbstring \
+            --with-openssl --with-zlib --with-ffi
           make -j"$(nproc)"
           make install
-          cd ext/ffi
-          "$PWD/../../../php-headers/bin/phpize"
-          ./configure --with-php-config="$PWD/../../../php-headers/bin/php-config" --with-ffi
+          "$STACK/php/bin/php" -v
+
+      - name: Build ext-webrtc
+        if: steps.php-cache.outputs.cache-hit != 'true'
+        run: |
+          STACK="$GITHUB_WORKSPACE/.cache/php-stack"
+          cd build-tmp
+          git clone --depth 1 --branch 0.3.1 https://github.com/axolotl-pm/ext-webrtc
+          cd ext-webrtc
+          "$STACK/php/bin/phpize"
+          ./configure --with-php-config="$STACK/php/bin/php-config" --enable-webrtc --with-libdatachannel="$STACK/libdatachannel"
           make -j"$(nproc)"
-          mkdir -p "$GITHUB_WORKSPACE/bin/php"
-          cp modules/ffi.so "$GITHUB_WORKSPACE/bin/php/ffi.so"
+          cp modules/webrtc.so "$STACK/webrtc.so"
 
       - name: Prepare Linux bin/php
         run: |
+          STACK="$GITHUB_WORKSPACE/.cache/php-stack"
           mkdir -p bin/php/extras/ssl
-          # the runtime resolves its libs relative to its real path (../lib), so keep it in bin/php7 and link it
-          ln -sf ../php7/bin/php bin/php/php
-          cp bin/php7/bin/php.ini bin/php/php.ini
-          # ffi.so is loaded by relative path; start.sh always runs from the project root
-          printf '\n; added by CI\nextension=bin/php/ffi.so\nffi.enable=1\n' >> bin/php/php.ini
+          cp "$STACK/php/bin/php" bin/php/php
+          cp "$STACK/webrtc.so" bin/php/webrtc.so
+          cp -a "$STACK"/libdatachannel/lib/libdatachannel.so* bin/php/
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+          # libs sit next to each other, so resolve them relative to the file itself
+          patchelf --set-rpath '$ORIGIN' bin/php/webrtc.so
+          # extensions are loaded by relative path; start.sh always runs from the project root
+          cat > bin/php/php.ini <<'INI'
+          memory_limit=1024M
+          date.timezone=UTC
+          short_open_tag=0
+          zend.assertions=-1
+          error_reporting=-1
+          display_errors=1
+          display_startup_errors=1
+          ffi.enable=1
+          extension=bin/php/webrtc.so
+          INI
           cp /etc/ssl/openssl.cnf bin/php/extras/ssl/openssl.cnf 2>/dev/null || true
           cp /etc/ssl/certs/ca-certificates.crt bin/php/extras/ssl/cacert.pem 2>/dev/null || true
+          chmod +x bin/php/php
           bin/php/php -c bin/php/php.ini -v
           MODS="$(bin/php/php -c bin/php/php.ini -m)"
-          for ext in webrtc ffi phar openssl zlib json; do
+          for ext in webrtc ffi phar openssl zlib json mbstring pcntl; do
             echo "$MODS" | grep -qix "$ext" || { echo "Missing PHP extension in bundle: $ext"; exit 1; }
           done
+          bin/php/php -c bin/php/php.ini -r 'exit(class_exists("pmmp\\webrtc\\PeerConnection") ? 0 : 1);'
           ls -la bin/php/
 
       - name: Copy native library
@@ -217,8 +268,8 @@ jobs:
 
       - name: Verify PHAR
         run: |
-          ls -la bin/server.phar 2>/dev/null || ls -la RaspberryX.phar 2>/dev/null || find . -name "*.phar" -maxdepth 2
-          php bin/server.phar --version 2>/dev/null || php RaspberryX.phar --version 2>/dev/null || true
+          ls -la bin/server.phar 2>/dev/null || ls -la TodiumX.phar 2>/dev/null || find . -name "*.phar" -maxdepth 2
+          php bin/server.phar --version 2>/dev/null || php TodiumX.phar --version 2>/dev/null || true
 
       - name: Upload PHAR
         uses: actions/upload-artifact@v4
@@ -226,7 +277,7 @@ jobs:
           name: server-phar
           path: |
             bin/server.phar
-            RaspberryX.phar
+            TodiumX.phar
           retention-days: 30
 
   release:
@@ -251,7 +302,7 @@ jobs:
           mv dist/raspberry_native_windows/raspberry_native.dll release-assets/raspberry_native-windows-x86_64.dll 2>/dev/null || true
           # phar
           mv dist/server-phar/server.phar release-assets/server.phar 2>/dev/null || true
-          mv dist/server-phar/RaspberryX.phar release-assets/RaspberryX.phar 2>/dev/null || true
+          mv dist/server-phar/TodiumX.phar release-assets/TodiumX.phar 2>/dev/null || true
           find dist -name "*.phar" -exec mv {} release-assets/ 2>/dev/null \; || true
           mv dist/todiumx-linux-bundle/TodiumX-stable-linux-x86_64.tar.gz release-assets/ 2>/dev/null || true
           ls -la release-assets/
@@ -267,7 +318,7 @@ jobs:
             release-assets/raspberry_native-linux-x86_64.so
             release-assets/raspberry_native-windows-x86_64.dll
             release-assets/server.phar
-            release-assets/RaspberryX.phar
+            release-assets/TodiumX.phar
             release-assets/TodiumX-stable-linux-x86_64.tar.gz
           generate_release_notes: true
         env:
