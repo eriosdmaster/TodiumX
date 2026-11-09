@@ -154,20 +154,31 @@ jobs:
           make -j"$(nproc)"
           cp modules/webrtc.so "$STACK/webrtc.so"
 
-      - name: Prepare Linux bin/
+      # PocketMine-style layout: bin/php7/bin/php, bin/php7/lib/..., bin/php7/etc/ssl
+      - name: Prepare Linux bin/ (PocketMine layout)
         run: |
           STACK="$GITHUB_WORKSPACE/.cache/php-stack"
-          mkdir -p bin/php/extras/ssl bin/native
-          cp "$STACK/php/bin/php" bin/php/php
-          cp "$STACK/webrtc.so" bin/php/webrtc.so
-          cp -a "$STACK"/libdatachannel/lib/libdatachannel.so* bin/php/
-          cp native/linux/libraspberry_native.so bin/native/
+          P=bin/php7
+          mkdir -p "$P/bin" "$P/lib/php/extensions" "$P/etc/ssl" bin/native
           sudo apt-get update
-          sudo apt-get install -y patchelf
-          # libs sit next to each other, so resolve them relative to the file itself
-          patchelf --set-rpath '$ORIGIN' bin/php/webrtc.so
+          sudo apt-get install -y patchelf libonig5 libffi8 zlib1g libssl3t64
+          cp "$STACK/php/bin/php" "$P/bin/php"
+          cp "$STACK/webrtc.so" "$P/lib/php/extensions/webrtc.so"
+          cp -a "$STACK"/libdatachannel/lib/libdatachannel.so* "$P/lib/"
+          cp native/linux/libraspberry_native.so bin/native/
+          # bundle the shared libs php links against (not guaranteed to exist on the target distro)
+          for lib in libssl.so.3 libcrypto.so.3 libz.so.1 libffi.so.8 libonig.so.5; do
+            src="$(ldd "$P/bin/php" | awk -v l="$lib" '$1==l {print $3}')"
+            [ -n "$src" ] || { echo "cannot resolve $lib"; exit 1; }
+            cp -L "$src" "$P/lib/$lib"
+          done
+          # resolve libs relative to each file, no LD_LIBRARY_PATH needed
+          patchelf --set-rpath '$ORIGIN/../lib' "$P/bin/php"
+          patchelf --set-rpath '$ORIGIN/../..' "$P/lib/php/extensions/webrtc.so"
+          for f in "$P"/lib/*.so*; do [ -L "$f" ] || patchelf --set-rpath '$ORIGIN' "$f"; done
+          strip --strip-unneeded "$P/bin/php" "$P/lib/php/extensions/webrtc.so"
           # extensions are loaded by relative path; start.sh always runs from the project root
-          cat > bin/php/php.ini <<'INI'
+          cat > "$P/bin/php.ini" <<'INI'
           memory_limit=1024M
           date.timezone=UTC
           short_open_tag=0
@@ -176,18 +187,18 @@ jobs:
           display_errors=1
           display_startup_errors=1
           ffi.enable=1
-          extension=bin/php/webrtc.so
+          extension=bin/php7/lib/php/extensions/webrtc.so
           INI
-          cp /etc/ssl/openssl.cnf bin/php/extras/ssl/openssl.cnf 2>/dev/null || true
-          cp /etc/ssl/certs/ca-certificates.crt bin/php/extras/ssl/cacert.pem 2>/dev/null || true
-          chmod +x bin/php/php
-          bin/php/php -c bin/php/php.ini -v
-          MODS="$(bin/php/php -c bin/php/php.ini -m)"
+          cp /etc/ssl/openssl.cnf "$P/etc/ssl/openssl.cnf" 2>/dev/null || true
+          cp /etc/ssl/certs/ca-certificates.crt "$P/etc/ssl/cacert.pem" 2>/dev/null || true
+          chmod +x "$P/bin/php"
+          "$P/bin/php" -c "$P/bin/php.ini" -v
+          MODS="$("$P/bin/php" -c "$P/bin/php.ini" -m)"
           for ext in webrtc ffi phar openssl zlib json mbstring pcntl; do
             echo "$MODS" | grep -qix "$ext" || { echo "Missing PHP extension in bundle: $ext"; exit 1; }
           done
-          bin/php/php -c bin/php/php.ini -r 'exit(class_exists("pmmp\\webrtc\\PeerConnection") ? 0 : 1);'
-          ls -la bin/php/ bin/native/
+          "$P/bin/php" -c "$P/bin/php.ini" -r 'exit(class_exists("pmmp\\webrtc\\PeerConnection") ? 0 : 1);'
+          ls -laR bin | head -60
 
       # ONLY bin/ goes into the archive (php, webrtc.so, libdatachannel, native lib, ssl extras, php.ini)
       - name: Create Linux bin archive
