@@ -14,6 +14,7 @@ use pmmp\webrtc\GatheringState;
 use InvalidArgumentException;
 use LogicException;
 use RuntimeException;
+use Throwable;
 
 class WebRtcSession{
 
@@ -46,6 +47,8 @@ class WebRtcSession{
             ->setMaxRemoteDescriptionSize(65536)
             ->setMaxPendingDataChannels(2);
 
+        $options = self::applyIce($options);
+
         $this->createdAt = hrtime(true);
         $this->peer = new PeerConnection($options);
 
@@ -55,6 +58,121 @@ class WebRtcSession{
             $this->peer->close();
             throw $exception;
         }
+    }
+
+    private static string $publicIp = "";
+    private static int $udpPort = 0;
+    private static bool $iceReported = false;
+    private static ?\raspberry\utils\Logger $iceLogger = null;
+
+    /**
+     * Behind NAT (panels, containers) the client cannot reach the addresses the server finds on its own.
+     * $udpPort makes every WebRTC connection use that one UDP port (it has to be open on the host) and
+     * $publicIp is put into the SDP answer instead of the private address of the container.
+     */
+    public static function configureIce(string $publicIp, int $udpPort, ?\raspberry\utils\Logger $logger = null) : void{
+        $publicIp = trim($publicIp);
+
+        if($publicIp !== "" && filter_var($publicIp, FILTER_VALIDATE_IP) === false){
+            $logger?->warning("nethernet-public-ip \"{$publicIp}\" is not a valid IP address, ignoring it");
+            $publicIp = "";
+        }
+
+        self::$publicIp = $publicIp;
+        self::$udpPort = $udpPort > 0 && $udpPort < 65536 ? $udpPort : 0;
+        self::$iceLogger = $logger;
+        self::$iceReported = false;
+    }
+
+    public static function getPublicIp() : string{
+        return self::$publicIp;
+    }
+
+    /**
+     * Calls the first method of $names that the extension has. Returns the options object to keep using, in case
+     * the setter returns a new one instead of changing itself.
+     *
+     * @param list<string> $names
+     * @param list<mixed>  $args
+     */
+    private static function callOption(PeerConnectionOptions $options, array $names, array $args, ?string &$used) : PeerConnectionOptions{
+        foreach($names as $name){
+            if(!method_exists($options, $name)){
+                continue;
+            }
+
+            try{
+                $result = $options->$name(...$args);
+            }catch(Throwable $exception){
+                self::$iceLogger?->warning("PeerConnectionOptions::{$name}() failed: " . $exception->getMessage());
+                continue;
+            }
+
+            $used = $name;
+
+            return $result instanceof PeerConnectionOptions ? $result : $options;
+        }
+
+        $used = null;
+
+        return $options;
+    }
+
+    private static function applyIce(PeerConnectionOptions $options) : PeerConnectionOptions{
+        if(self::$udpPort <= 0){
+            return $options;
+        }
+
+        $port = self::$udpPort;
+
+        $options = self::callOption($options, ["setEnableIceUdpMux", "setIceUdpMux", "setUdpMux", "enableIceUdpMux"], [true], $mux);
+
+        $options = self::callOption($options, ["setPortRange", "setIcePortRange"], [$port, $port], $range);
+
+        if($range === null){
+            $options = self::callOption($options, ["setPortRangeBegin"], [$port], $begin);
+            $options = self::callOption($options, ["setPortRangeEnd"], [$port], $end);
+            $range = $begin !== null && $end !== null ? "{$begin}+{$end}" : null;
+        }
+
+        if(!self::$iceReported){
+            self::$iceReported = true;
+
+            if($mux === null || $range === null){
+                self::$iceLogger?->warning("nethernet-udp-port is set but this webrtc extension has no matching option (udp mux: " . ($mux ?? "missing") . ", port range: " . ($range ?? "missing") . "). Available methods: " . implode(", ", get_class_methods(PeerConnectionOptions::class)));
+            }else{
+                self::$iceLogger?->info("WebRTC uses the fixed UDP port {$port} ({$mux}, {$range})");
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * Puts the public IP into the private host candidates of an SDP answer.
+     */
+    public static function rewriteAnswer(string $answer) : string{
+        if(self::$publicIp === ""){
+            return $answer;
+        }
+
+        $public = self::$publicIp;
+
+        return (string) preg_replace_callback(
+            '/^(a=candidate:\S+\s+\d+\s+\S+\s+\d+\s+)(\S+)(\s+\d+\s+typ\s+host)/m',
+            static function(array $match) use ($public) : string{
+                $ip = $match[2];
+
+                if(filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false){
+                    return $match[0];
+                }
+
+                $isPublic = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false;
+
+                return $isPublic ? $match[0] : $match[1] . $public . $match[3];
+            },
+            $answer
+        );
     }
 
     public function getId() : int{
