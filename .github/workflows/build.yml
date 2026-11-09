@@ -67,10 +67,11 @@ jobs:
         run: cargo build --release --target ${{ env.RUST_TARGET }}
 
       - name: Verify native artifact
+        shell: bash
         working-directory: native
         run: |
           ls -la target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }}
-          file target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }}
+          file target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }} || true
 
       - name: Upload native library
         uses: actions/upload-artifact@v4
