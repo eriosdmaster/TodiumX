@@ -4,63 +4,67 @@
 use std::collections::{HashMap, VecDeque};
 use std::ffi::CStr;
 use std::os::raw::c_char;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use rquickjs::{Context, Runtime};
+use rquickjs::function::Rest;
+use rquickjs::{Coerced, Context, Runtime};
+
+type Logs = Arc<Mutex<VecDeque<String>>>;
 
 struct ScriptVm {
+    // field order matters: the context must be dropped before the runtime
+    context: Context,
     _runtime: Runtime,
-    context: Context<'static>,
-    logs: VecDeque<String>,
+    /// shared with the console functions, so console.log never needs the global lock (no deadlock while eval runs)
+    logs: Logs,
 }
 
-static VMS: OnceLock<Mutex<HashMap<u64, ScriptVm>>> = OnceLock::new();
+type SharedVm = Arc<Mutex<ScriptVm>>;
+
+static VMS: OnceLock<Mutex<HashMap<u64, SharedVm>>> = OnceLock::new();
 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1_000_000);
 
-fn vms() -> &'static Mutex<HashMap<u64, ScriptVm>> {
+fn vms() -> &'static Mutex<HashMap<u64, SharedVm>> {
     VMS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Runs `f` on one VM; the global map lock is released before `f` runs.
 fn with_vm<T>(id: u64, f: impl FnOnce(&mut ScriptVm) -> T) -> Option<T> {
-    vms().lock().ok()?.get_mut(&id).map(f)
+    let vm = vms().lock().ok()?.get(&id).cloned()?;
+    let mut guard = vm.lock().ok()?;
+    Some(f(&mut guard))
 }
 
-fn push_log(vm: &mut ScriptVm, level: &str, msg: String) {
-    vm.logs.push_back(format!("[{level}] {msg}"));
-    if vm.logs.len() > 500 {
-        vm.logs.pop_front();
+fn push_log(logs: &Logs, level: &str, msg: String) {
+    if let Ok(mut q) = logs.lock() {
+        q.push_back(format!("[{level}] {msg}"));
+        if q.len() > 500 {
+            q.pop_front();
+        }
     }
 }
 
-fn install_console(ctx: &Context<'static>, id: u64) {
-    let _ = ctx.with(|ctx| {
+fn install_console(ctx: &Context, logs: &Logs) {
+    let _ = ctx.with(|ctx| -> rquickjs::Result<()> {
         let global = ctx.globals();
-        let console = rquickjs::Object::new(ctx.clone()).ok();
-        if let Some(console) = console {
-            for (name, level) in [("log", "LOG"), ("info", "INFO"), ("warn", "WARN"), ("error", "ERROR"), ("debug", "DEBUG")] {
-                let lvl = level.to_string();
-                let f = rquickjs::Function::new(ctx.clone(), move |msg: rquickjs::function::Rest<String>| {
-                    let text = msg.0.join(" ");
-                    if let Some(mut guard) = vms().lock().ok() {
-                        if let Some(vm) = guard.get_mut(&id) {
-                            push_log(vm, &lvl, text);
-                        }
-                    }
-                });
-                if let Ok(f) = f {
-                    let _ = console.set(name, f);
-                }
-            }
-            let _ = global.set("console", console);
+        let console = rquickjs::Object::new(ctx.clone())?;
+        for (name, level) in [("log", "LOG"), ("info", "INFO"), ("warn", "WARN"), ("error", "ERROR"), ("debug", "DEBUG")] {
+            let lvl = level.to_string();
+            let logs = logs.clone();
+            let f = rquickjs::Function::new(ctx.clone(), move |args: Rest<Coerced<String>>| {
+                let text = args.0.into_iter().map(|c| c.0).collect::<Vec<_>>().join(" ");
+                push_log(&logs, &lvl, text);
+            })?;
+            console.set(name, f)?;
         }
+        global.set("console", console)?;
         // Minimal timer shims
         let _ = ctx.eval::<(), _>("globalThis.setTimeout = globalThis.setTimeout || function(fn,ms){ try{ if(typeof fn==='function') fn(); }catch(e){ console.error(e); } return 0; }; globalThis.setInterval = globalThis.setInterval || function(){ return 0; }; globalThis.clearTimeout = function(){}; globalThis.clearInterval = function(){};");
-        Ok::<_, rquickjs::Error>(())
+        Ok(())
     });
 }
 
 pub fn create_runtime(shim_js: &str, pack_name: &str) -> u64 {
-    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let runtime = match Runtime::new() {
         Ok(r) => r,
         Err(_) => return 0,
@@ -69,30 +73,31 @@ pub fn create_runtime(shim_js: &str, pack_name: &str) -> u64 {
         Ok(c) => c,
         Err(_) => return 0,
     };
-    {
-        let mut guard = match vms().lock() {
-            Ok(g) => g,
-            Err(_) => return 0,
-        };
-        guard.insert(id, ScriptVm { _runtime: runtime, context, logs: VecDeque::new() });
+    let logs: Logs = Arc::new(Mutex::new(VecDeque::new()));
+    install_console(&context, &logs);
+    push_log(&logs, "INFO", format!("Script runtime created for pack '{pack_name}'"));
+    let setup = format!("globalThis.__TODIUMX_PACK__ = {};\n{}", json_string(pack_name), shim_js);
+    if let Err(e) = context.with(|ctx| ctx.eval::<(), _>(setup).map_err(|e| e.to_string())) {
+        push_log(&logs, "ERROR", format!("Shim error: {e}"));
     }
-    install_console(&with_vm(id, |vm| vm.context.clone()).unwrap_or_else(|| Context::full(&Runtime::new().unwrap()).unwrap()), id);
-    let _ = with_vm(id, |vm| {
-        install_console(&vm.context, id);
-        push_log(vm, "INFO", format!("Script runtime created for pack '{pack_name}'"));
-        let setup = format!("globalThis.__TODIUMX_PACK__ = {};\n{}", json_string(pack_name), shim_js);
-        let _ = vm.context.with(|ctx| ctx.eval::<(), _>(setup.as_str()));
-    });
-    id
+
+    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    match vms().lock() {
+        Ok(mut guard) => {
+            guard.insert(id, Arc::new(Mutex::new(ScriptVm { context, _runtime: runtime, logs })));
+            id
+        }
+        Err(_) => 0,
+    }
 }
 
 pub fn eval_script(id: u64, code: &str) -> bool {
     with_vm(id, |vm| {
-        let result = vm.context.with(|ctx| ctx.eval::<rquickjs::Value, _>(code));
+        let result = vm.context.with(|ctx| ctx.eval::<(), _>(code).map_err(|e| e.to_string()));
         match result {
-            Ok(_) => true,
+            Ok(()) => true,
             Err(e) => {
-                push_log(vm, "ERROR", format!("Script error: {e}"));
+                push_log(&vm.logs, "ERROR", format!("Script error: {e}"));
                 false
             }
         }
@@ -100,13 +105,13 @@ pub fn eval_script(id: u64, code: &str) -> bool {
 }
 
 pub fn poll_log(id: u64) -> Option<String> {
-    with_vm(id, |vm| vm.logs.pop_front()).flatten()
+    with_vm(id, |vm| vm.logs.lock().ok()?.pop_front()).flatten()
 }
 
 pub fn free_runtime(id: u64) {
-    if let Ok(mut guard) = vms().lock() {
-        guard.remove(&id);
-    }
+    // take the VM out first, drop it after the map lock is released
+    let removed = vms().lock().ok().and_then(|mut g| g.remove(&id));
+    drop(removed);
 }
 
 fn json_string(s: &str) -> String {
@@ -152,19 +157,14 @@ pub extern "C" fn rx_script_eval(handle: u64, code: *const c_char) -> i32 {
 /// Polls one log line. Returns 1 and writes malloc-allocated UTF-8 into *out/*out_len; caller frees via rx_free.
 /// Returns 0 if no log available.
 #[no_mangle]
-pub extern "C" fn rx_script_poll_log(handle: u64, out: *mut *mut c_char, out_len: *mut usize) -> i32 {
+pub extern "C" fn rx_script_poll_log(handle: u64, out: *mut *mut u8, out_len: *mut usize) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         if out.is_null() || out_len.is_null() { return 0; }
         *out = std::ptr::null_mut();
         *out_len = 0;
         match poll_log(handle) {
             Some(s) => {
-                let mut b = s.into_bytes();
-                let len = b.len();
-                let ptr = b.as_mut_ptr() as *mut c_char;
-                std::mem::forget(b);
-                *out = ptr;
-                *out_len = len;
+                crate::give(s.into_bytes(), out, out_len);
                 1
             }
             None => 0,

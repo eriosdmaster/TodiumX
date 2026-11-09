@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 #deflate for packet compression
 miniz_oxide = "0.8.9"
 #embedded JavaScript engine for behavior pack scripts (no Node.js required)
-rquickjs = { version = "0.6", default-features = false, features = ["classes", "properties", "array-buffer", "bindgen", "loader", "either", "futures"] }
+rquickjs = { version = "0.6", default-features = false, features = ["classes", "properties", "array-buffer", "bindgen", "loader", "either", "futures", "parallel"] }
 
 [profile.release]
 opt-level = 3
