@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             artifact_name: raspberry_native_linux
             target: x86_64-unknown-linux-gnu
             lib_name: libraspberry_native.so
@@ -77,7 +77,7 @@ jobs:
 
   linux-bin:
     name: Build Linux Binary Bundle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     steps:
       - name: Checkout repository
@@ -92,63 +92,65 @@ jobs:
       - name: Install system PHP + extensions
         run: |
           sudo apt-get update
-          sudo apt-get install -y php8.3-cli php8.3-common php8.3-openssl php8.3-json php8.3-mbstring php8.3-zlib php8.3-ffi php8.3-curl php8.3-xml php8.3-sqlite3 php8.3-pgsql php8.3-intl php8.3-gd libssl3 libsqlite3-0 libxml2 libxslt1.1 libicu77 libonig5 libsodium23 libzip4 libpng16-16 libpq5 libssh2-1 libbrotli1 libnghttp2-14
+          sudo apt-get install -y php8.3-cli php8.3-common php8.3-mbstring php8.3-curl php8.3-xml php8.3-sqlite3 php8.3-pgsql php8.3-intl php8.3-gd php8.3-zip unzip
 
       - name: Prepare Linux bin/php from system
         run: |
-          mkdir -p TodiumX-stable/bin/php/extras/ssl
+          mkdir -p bin/php/extras/ssl
           # Copy PHP binary
-          cp "$(which php)" TodiumX-stable/bin/php/php
-          chmod +x TodiumX-stable/bin/php/php
+          cp "$(which php)" bin/php/php
+          chmod +x bin/php/php
           # php.ini
           PHP_INI_DIR=$(php -i | grep "Scan this dir" | awk -F': ' '{print $2}')
           if [ -z "$PHP_INI_DIR" ]; then PHP_INI_DIR=$(php -i | grep "Loaded Configuration File" | awk -F': ' '{print $2}' | xargs dirname); fi
-          cp "$PHP_INI_DIR/php.ini" TodiumX-stable/bin/php/php.ini 2>/dev/null || php -i | grep "php.ini" | head -1 | awk -F'=> ' '{print $2}' | xargs cp -t TodiumX-stable/bin/php/ 2>/dev/null || true
+          cp "$PHP_INI_DIR/php.ini" bin/php/php.ini 2>/dev/null || php -i | grep "php.ini" | head -1 | awk -F'=> ' '{print $2}' | xargs cp -t bin/php/ 2>/dev/null || true
           # SSL
-          cp /etc/ssl/openssl.cnf TodiumX-stable/bin/php/extras/ssl/openssl.cnf 2>/dev/null || true
-          cp /etc/ssl/certs/ca-certificates.crt TodiumX-stable/bin/php/extras/ssl/cacert.pem 2>/dev/null || true
+          cp /etc/ssl/openssl.cnf bin/php/extras/ssl/openssl.cnf 2>/dev/null || true
+          cp /etc/ssl/certs/ca-certificates.crt bin/php/extras/ssl/cacert.pem 2>/dev/null || true
           # Copy required shared libraries (ldd on php binary)
           ldd "$(which php)" | awk '{print $3}' | grep -E '^/' | sort -u | while read lib; do
             if [ -f "$lib" ]; then
-              cp "$lib" TodiumX-stable/bin/php/ 2>/dev/null || true
+              cp "$lib" bin/php/ 2>/dev/null || true
             fi
           done
           # Also copy common extension .so files
           php -m | grep -v '^$' | while read ext; do
             EXT_FILE=$(php -i 2>/dev/null | grep -i "extension_dir" | head -1 | awk -F'=> ' '{print $2}' | xargs -I{} find {} -name "${ext}.so" 2>/dev/null | head -1)
             if [ -n "$EXT_FILE" ] && [ -f "$EXT_FILE" ]; then
-              cp "$EXT_FILE" TodiumX-stable/bin/php/ 2>/dev/null || true
+              cp "$EXT_FILE" bin/php/ 2>/dev/null || true
             fi
           done
-          ls -la TodiumX-stable/bin/php/
+          ls -la bin/php/
 
       - name: Copy native library
         run: |
-          mkdir -p TodiumX-stable/bin/native
-          cp native/linux/libraspberry_native.so TodiumX-stable/bin/native/
+          mkdir -p bin/native
+          cp native/linux/libraspberry_native.so bin/native/
+
+      - name: Install Composer dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction
 
       - name: Build PHAR
-        working-directory: TodiumX-stable
         run: |
           php -d phar.readonly=0 build/make-server.php
 
       - name: Verify binary bundle
         run: |
-          ls -la TodiumX-stable/bin/php/
-          ls -la TodiumX-stable/bin/native/
+          ls -la bin/php/
+          ls -la bin/native/
           ./start.sh --version 2>&1 || true
 
       - name: Create Linux release archive
         run: |
-          cd TodiumX-stable
-          tar -czf ../TodiumX-stable-linux-x86_64.tar.gz --owner=0 --group=0 .
-          ls -la ../TodiumX-stable-linux-x86_64.tar.gz
+          mkdir -p dist-linux
+          tar --exclude=./.git --exclude=./dist-linux --exclude=./native/target -czf dist-linux/TodiumX-stable-linux-x86_64.tar.gz --owner=0 --group=0 .
+          ls -la dist-linux/
 
       - name: Upload Linux bundle
         uses: actions/upload-artifact@v4
         with:
           name: todiumx-linux-bundle
-          path: TodiumX-stable-linux-x86_64.tar.gz
+          path: dist-linux/TodiumX-stable-linux-x86_64.tar.gz
           retention-days: 30
 
   phar:
@@ -176,25 +178,21 @@ jobs:
           coverage: none
 
       - name: Install Composer dependencies
-        working-directory: TodiumX-stable
         run: composer install --no-dev --optimize-autoloader --no-interaction
 
       - name: Prepare bin/native
-        working-directory: TodiumX-stable
         run: |
           mkdir -p bin/native
-          ls -la ../native/
-          cp ../native/libraspberry_native.so bin/native/ 2>/dev/null || true
-          cp ../native/raspberry_native.dll bin/native/ 2>/dev/null || true
+          ls -la native/
+          cp native/libraspberry_native.so bin/native/ 2>/dev/null || true
+          cp native/raspberry_native.dll bin/native/ 2>/dev/null || true
           ls -la bin/native/
 
       - name: Build PHAR
-        working-directory: TodiumX-stable
         run: |
           php -d phar.readonly=0 build/make-server.php
 
       - name: Verify PHAR
-        working-directory: TodiumX-stable
         run: |
           ls -la bin/server.phar 2>/dev/null || ls -la RaspberryX.phar 2>/dev/null || find . -name "*.phar" -maxdepth 2
           php bin/server.phar --version 2>/dev/null || php RaspberryX.phar --version 2>/dev/null || true
@@ -204,8 +202,8 @@ jobs:
         with:
           name: server-phar
           path: |
-            TodiumX-stable/bin/server.phar
-            TodiumX-stable/RaspberryX.phar
+            bin/server.phar
+            RaspberryX.phar
           retention-days: 30
 
   release:
