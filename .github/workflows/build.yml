@@ -63,11 +63,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('TodiumX-stable/native/Cargo.toml', 'TodiumX-stable/native/Cargo.lock') }}
 
       - name: Build native library (release)
-        working-directory: TodiumX-stable/native
+        working-directory: native
         run: cargo build --release --target ${{ env.RUST_TARGET }}
 
       - name: Verify native artifact
-        working-directory: TodiumX-stable/native
+        working-directory: native
         run: |
           ls -la target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }}
           file target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }}
@@ -76,7 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: TodiumX-stable/native/target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }}
+          path: native/target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }}
           retention-days: 30
 
   phar:
@@ -92,7 +92,7 @@ jobs:
       - name: Download native libraries
         uses: actions/download-artifact@v4
         with:
-          path: TodiumX-stable/bin/native
+          path: native
           merge-multiple: true
 
       - name: Install PHP
@@ -111,7 +111,12 @@ jobs:
         working-directory: TodiumX-stable
         run: |
           mkdir -p bin/native
-          # The downloaded artifacts are flat; ensure correct names per OS (we build on ubuntu, so .so)
+          # native artifacts downloaded to ./native/ (flat)
+          ls -la ../native/
+          # Copy linux .so (we're on ubuntu)
+          cp ../native/libraspberry_native.so bin/native/ 2>/dev/null || true
+          cp ../native/raspberry_native.dll bin/native/ 2>/dev/null || true
+          cp ../native/libraspberry_native.dylib bin/native/ 2>/dev/null || true
           ls -la bin/native/
 
       - name: Build PHAR
@@ -120,19 +125,21 @@ jobs:
           php -d phar.readonly=0 build/make-server.php
           # copy native library into bin/native for distribution
           mkdir -p bin/native
-          cp ../native/target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }} bin/native/
+          cp ../native/libraspberry_native.so bin/native/ 2>/dev/null || true
 
       - name: Verify PHAR
         working-directory: TodiumX-stable
         run: |
-          ls -la bin/server.phar
-          php bin/server.phar --version || php bin/server.phar -v || true
+          ls -la bin/server.phar 2>/dev/null || ls -la RaspberryX.phar 2>/dev/null || find . -name "*.phar" -maxdepth 2
+          php bin/server.phar --version 2>/dev/null || php RaspberryX.phar --version 2>/dev/null || true
 
       - name: Upload PHAR
         uses: actions/upload-artifact@v4
         with:
           name: server-phar
-          path: TodiumX-stable/bin/server.phar
+          path: |
+            TodiumX-stable/bin/server.phar
+            TodiumX-stable/RaspberryX.phar
           retention-days: 30
 
   release:
@@ -153,10 +160,15 @@ jobs:
           ls -la dist/
           # Flatten artifacts
           mkdir -p release-assets
+          # native libs (artifact names as folders)
           mv dist/raspberry_native_linux/libraspberry_native.so release-assets/raspberry_native-linux-x86_64.so 2>/dev/null || true
           mv dist/raspberry_native_macos/libraspberry_native.dylib release-assets/raspberry_native-macos-x86_64.dylib 2>/dev/null || true
           mv dist/raspberry_native_windows/raspberry_native.dll release-assets/raspberry_native-windows-x86_64.dll 2>/dev/null || true
+          # phar (may be in bin/ or root)
           mv dist/server-phar/server.phar release-assets/server.phar 2>/dev/null || true
+          mv dist/server-phar/RaspberryX.phar release-assets/RaspberryX.phar 2>/dev/null || true
+          # fallback: find any phar
+          find dist -name "*.phar" -exec mv {} release-assets/ 2>/dev/null \; || true
           ls -la release-assets/
 
       - name: Create GitHub Release
@@ -171,6 +183,7 @@ jobs:
             release-assets/raspberry_native-macos-x86_64.dylib
             release-assets/raspberry_native-windows-x86_64.dll
             release-assets/server.phar
+            release-assets/RaspberryX.phar
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
