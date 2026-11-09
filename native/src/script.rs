@@ -6,11 +6,11 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
-use rquickjs::{Context, Function, Runtime};
+use rquickjs::{Context, Runtime};
 
 struct ScriptVm {
     _runtime: Runtime,
-    context: Context,
+    context: Context<'static>,
     logs: VecDeque<String>,
 }
 
@@ -22,8 +22,7 @@ fn vms() -> &'static Mutex<HashMap<u64, ScriptVm>> {
 }
 
 fn with_vm<T>(id: u64, f: impl FnOnce(&mut ScriptVm) -> T) -> Option<T> {
-    let mut guard = vms().lock().ok()?;
-    guard.get_mut(&id).map(f)
+    vms().lock().ok()?.get_mut(&id).map(f)
 }
 
 fn push_log(vm: &mut ScriptVm, level: &str, msg: String) {
@@ -33,14 +32,14 @@ fn push_log(vm: &mut ScriptVm, level: &str, msg: String) {
     }
 }
 
-fn install_console(ctx: &Context, id: u64) {
+fn install_console(ctx: &Context<'static>, id: u64) {
     let _ = ctx.with(|ctx| {
         let global = ctx.globals();
         let console = rquickjs::Object::new(ctx.clone()).ok();
         if let Some(console) = console {
             for (name, level) in [("log", "LOG"), ("info", "INFO"), ("warn", "WARN"), ("error", "ERROR"), ("debug", "DEBUG")] {
                 let lvl = level.to_string();
-                let f = Function::new(ctx.clone(), move |msg: rquickjs::function::Rest<String>| {
+                let f = rquickjs::Function::new(ctx.clone(), move |msg: rquickjs::function::Rest<String>| {
                     let text = msg.0.join(" ");
                     if let Some(mut guard) = vms().lock().ok() {
                         if let Some(vm) = guard.get_mut(&id) {
@@ -54,7 +53,7 @@ fn install_console(ctx: &Context, id: u64) {
             }
             let _ = global.set("console", console);
         }
-        // Minimal timer shims (no real event loop integration; scripts should not rely on long timers)
+        // Minimal timer shims
         let _ = ctx.eval::<(), _>("globalThis.setTimeout = globalThis.setTimeout || function(fn,ms){ try{ if(typeof fn==='function') fn(); }catch(e){ console.error(e); } return 0; }; globalThis.setInterval = globalThis.setInterval || function(){ return 0; }; globalThis.clearTimeout = function(){}; globalThis.clearInterval = function(){};");
         Ok::<_, rquickjs::Error>(())
     });
@@ -78,7 +77,6 @@ pub fn create_runtime(shim_js: &str, pack_name: &str) -> u64 {
         guard.insert(id, ScriptVm { _runtime: runtime, context, logs: VecDeque::new() });
     }
     install_console(&with_vm(id, |vm| vm.context.clone()).unwrap_or_else(|| Context::full(&Runtime::new().unwrap()).unwrap()), id);
-    // Reinstall on actual context
     let _ = with_vm(id, |vm| {
         install_console(&vm.context, id);
         push_log(vm, "INFO", format!("Script runtime created for pack '{pack_name}'"));

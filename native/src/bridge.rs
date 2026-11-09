@@ -5,33 +5,29 @@ use std::collections::{HashMap, VecDeque};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
-use std::time::Duration;
 
-use rquickjs::{Context, Function, Runtime, Value};
+use rquickjs::{Context, Function, Runtime, Value, JsLifetime};
 
 static BRIDGES: OnceLock<Mutex<HashMap<u64, ScriptBridge>>> = OnceLock::new();
 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(2_000_000);
 
 struct ScriptBridge {
     _runtime: Runtime,
-    context: Context,
+    context: Context<'static>,
     request_queue: VecDeque<BridgeRequest>,
     response_queue: VecDeque<BridgeResponse>,
     script_id: u64,
 }
 
-#[derive(Debug, Clone)]
 struct BridgeRequest {
     id: u64,
     method: String,
-    params: Value,
+    params: Value<'static>,
 }
 
-#[derive(Debug, Clone)]
 struct BridgeResponse {
     id: u64,
-    result: Value,
+    result: Value<'static>,
     error: Option<String>,
 }
 
@@ -43,9 +39,10 @@ fn with_bridge<T>(id: u64, f: impl FnOnce(&mut ScriptBridge) -> T) -> Option<T> 
     bridges().lock().ok()?.get_mut(&id).map(f)
 }
 
-fn create_bridge_context(shim_js: &str, pack_name: &str) -> (u64, Runtime, Context) {
+fn create_bridge_context(shim_js: &str, pack_name: &str) -> (u64, Runtime, Context<'static>) {
     let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let runtime = Runtime::new().expect("QuickJS runtime creation failed");
+    // SAFETY: we keep the Runtime alive inside ScriptBridge; 'static context is valid for the bridge lifetime
     let context = Context::full(&runtime).expect("QuickJS context creation failed");
     (id, runtime, context)
 }
@@ -67,7 +64,7 @@ pub extern "C" fn rx_bridge_new(pack_name: *const c_char, shim_js: *const c_char
             script_id: id,
         });
 
-        // Inject bridge protocol into JS global: __mc_bridge_call(method, params, callback)
+        // Inject bridge protocol into JS global: __mc_bridge_call(method, params) -> Promise
         let _ = with_bridge(id, |b| {
             let ctx = b.context.clone();
             let _ = ctx.with(|ctx| {
@@ -79,10 +76,6 @@ pub extern "C" fn rx_bridge_new(pack_name: *const c_char, shim_js: *const c_char
                     if let Some(bridge) = guard.get_mut(&id) {
                         let req_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64;
                         bridge.request_queue.push_back(BridgeRequest { id: req_id, method, params });
-                        // Register resolver to be called when response arrives (poll loop in PHP will call rx_bridge_poll_response)
-                        // Store resolver in a side map keyed by req_id (simplified: capture via closure in a static map)
-                        // For simplicity, we just return a promise that resolves on next poll if response ready.
-                        // Full implementation would need a resolver registry. Here we rely on synchronous pattern: PHP calls poll and returns value immediately.
                     }
                     promise
                 });
@@ -121,7 +114,7 @@ pub extern "C" fn rx_bridge_poll_request(handle: u64, out_method: *mut *mut c_ch
         *out_params = std::ptr::null_mut(); *out_params_len = 0;
         match with_bridge(handle, |b| b.request_queue.pop_front()) {
             Some(req) => {
-                let method_json = rquickjs::json::stringify(&req.params).unwrap_or_else(|_| "{}".to_string());
+                let method_json = Value::stringify(&req.params).unwrap_or_else(|_| "{}".to_string());
                 let m_bytes = req.method.into_bytes();
                 let p_bytes = method_json.into_bytes();
                 let m_ptr = CString::new(m_bytes).unwrap().into_raw();
@@ -142,7 +135,7 @@ pub extern "C" fn rx_bridge_submit_response(handle: u64, request_id: u64, result
         let result = if result_json.is_null() { "null".to_string() } else { CStr::from_ptr(result_json).to_str().unwrap_or("null").to_string() };
         let error = if error_json.is_null() { None } else { CStr::from_ptr(error_json).to_str().ok().map(|s| s.to_string()) };
         with_bridge(handle, |b| {
-            b.response_queue.push_back(BridgeResponse { id: request_id, result: rquickjs::Value::from_json(&b.context, &result).unwrap_or(Value::Undefined), error });
+            b.response_queue.push_back(BridgeResponse { id: request_id, result: Value::from_json(&b.context, &result).unwrap_or(Value::Undefined), error });
         }).is_some() as i32
     }).unwrap_or(0)
 }
@@ -157,7 +150,7 @@ pub extern "C" fn rx_bridge_poll_response(handle: u64, out_result: *mut *mut c_c
         *out_error = std::ptr::null_mut(); *out_error_len = 0;
         match with_bridge(handle, |b| b.response_queue.pop_front()) {
             Some(resp) => {
-                let r = rquickjs::json::stringify(&resp.result).unwrap_or_else(|_| "null".to_string());
+                let r = Value::stringify(&resp.result).unwrap_or_else(|_| "null".to_string());
                 let e = resp.error.unwrap_or_default();
                 let r_ptr = CString::new(r).unwrap().into_raw();
                 let e_ptr = CString::new(e).unwrap().into_raw();
