@@ -76,7 +76,7 @@ jobs:
           retention-days: 30
 
   linux-bin:
-    name: Build Linux Binary Bundle
+    name: Build Linux bin (php + libs)
     runs-on: ubuntu-24.04
     needs: build
     steps:
@@ -88,14 +88,6 @@ jobs:
         with:
           name: raspberry_native_linux
           path: native/linux
-
-      - name: Install PHP 8.5
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.5'
-          extensions: ffi, zlib, openssl, mbstring, curl, xml, sqlite3, pgsql, intl, gd, zip, sockets, pcntl
-          ini-values: phar.readonly=0
-          coverage: none
 
       # ext-webrtc (NetherNet) is not in stock PHP, so PHP itself is built here: PHP 8.5 (ZTS) with ext-ffi built in,
       # plus ext-webrtc (axolotl-pm/ext-webrtc) on top of libdatachannel. The result is cached.
@@ -162,13 +154,14 @@ jobs:
           make -j"$(nproc)"
           cp modules/webrtc.so "$STACK/webrtc.so"
 
-      - name: Prepare Linux bin/php
+      - name: Prepare Linux bin/
         run: |
           STACK="$GITHUB_WORKSPACE/.cache/php-stack"
-          mkdir -p bin/php/extras/ssl
+          mkdir -p bin/php/extras/ssl bin/native
           cp "$STACK/php/bin/php" bin/php/php
           cp "$STACK/webrtc.so" bin/php/webrtc.so
           cp -a "$STACK"/libdatachannel/lib/libdatachannel.so* bin/php/
+          cp native/linux/libraspberry_native.so bin/native/
           sudo apt-get update
           sudo apt-get install -y patchelf
           # libs sit next to each other, so resolve them relative to the file itself
@@ -194,37 +187,152 @@ jobs:
             echo "$MODS" | grep -qix "$ext" || { echo "Missing PHP extension in bundle: $ext"; exit 1; }
           done
           bin/php/php -c bin/php/php.ini -r 'exit(class_exists("pmmp\\webrtc\\PeerConnection") ? 0 : 1);'
-          ls -la bin/php/
+          ls -la bin/php/ bin/native/
 
-      - name: Copy native library
-        run: |
-          mkdir -p bin/native
-          cp native/linux/libraspberry_native.so bin/native/
-
-      - name: Install Composer dependencies
-        run: composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
-
-      - name: Build PHAR
-        run: |
-          php -d phar.readonly=0 build/make-server.php
-
-      - name: Verify binary bundle
-        run: |
-          ls -la bin/php/
-          ls -la bin/native/
-          ./start.sh --version 2>&1 || true
-
-      - name: Create Linux release archive
+      # ONLY bin/ goes into the archive (php, webrtc.so, libdatachannel, native lib, ssl extras, php.ini)
+      - name: Create Linux bin archive
         run: |
           mkdir -p dist-linux
-          tar --exclude=./.git --exclude=./dist-linux --exclude=./native/target -czf dist-linux/TodiumX-stable-linux-x86_64.tar.gz --owner=0 --group=0 .
+          tar -czf dist-linux/TodiumX-linux-x86_64-bin.tar.gz --owner=0 --group=0 bin
+          tar -tzf dist-linux/TodiumX-linux-x86_64-bin.tar.gz | head -30
           ls -la dist-linux/
 
-      - name: Upload Linux bundle
+      - name: Upload Linux bin
         uses: actions/upload-artifact@v4
         with:
-          name: todiumx-linux-bundle
-          path: dist-linux/TodiumX-stable-linux-x86_64.tar.gz
+          name: todiumx-linux-bin
+          path: dist-linux/TodiumX-linux-x86_64-bin.tar.gz
+          retention-days: 30
+
+  windows-bin:
+    name: Build Windows bin (php.exe + dlls)
+    runs-on: windows-2022
+    needs: build
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Windows native library
+        uses: actions/download-artifact@v4
+        with:
+          name: raspberry_native_windows
+          path: native/windows
+
+      # Official PHP 8.5 x64 *thread-safe* build (same ZTS flavour as the Linux bundle).
+      - name: Install PHP 8.5 (TS)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: ffi, openssl, mbstring, sockets
+          coverage: none
+        env:
+          phpts: ts
+
+      - name: Cache Windows webrtc stack
+        id: win-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/win-stack
+          key: win-stack-php8.5-dc-vcpkg-webrtc0.3.1-v1
+
+      # libdatachannel (+ its openssl/juice/usrsctp deps) from vcpkg, dynamic DLLs
+      - name: Build libdatachannel (vcpkg)
+        if: steps.win-cache.outputs.cache-hit != 'true'
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libdatachannel:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+          $dst = "$env:GITHUB_WORKSPACE\.cache\win-stack\libdatachannel"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\*" $dst -Recurse -Force
+          Get-ChildItem "$dst\bin" -Filter *.dll | Select-Object Name
+
+      # ext-webrtc needs a config.w32 in axolotl-pm/ext-webrtc. If this step fails, that is the first thing to check.
+      - name: Build ext-webrtc
+        if: steps.win-cache.outputs.cache-hit != 'true'
+        uses: php/php-windows-builder/extension@v1
+        with:
+          extension-url: https://github.com/axolotl-pm/ext-webrtc
+          extension-ref: '0.3.1'
+          php-version: '8.5'
+          arch: x64
+          ts: ts
+          args: --enable-webrtc --with-libdatachannel=${{ github.workspace }}\.cache\win-stack\libdatachannel
+
+      - name: Collect php_webrtc.dll
+        if: steps.win-cache.outputs.cache-hit != 'true'
+        run: |
+          $dll = Get-ChildItem -Path $env:GITHUB_WORKSPACE, "$env:RUNNER_TEMP", "D:\a" -Recurse -Filter php_webrtc.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { throw "php_webrtc.dll not found after extension build" }
+          Write-Host "Found $($dll.FullName)"
+          Copy-Item $dll.FullName "$env:GITHUB_WORKSPACE\.cache\win-stack\php_webrtc.dll"
+
+      - name: Prepare Windows bin/
+        run: |
+          $stack = "$env:GITHUB_WORKSPACE\.cache\win-stack"
+          $phpDir = Split-Path (Get-Command php).Source
+          Write-Host "PHP dir: $phpDir"
+          New-Item -ItemType Directory -Force -Path bin\php, bin\native | Out-Null
+
+          # php.exe + its runtime dlls + ext\ (cgi/phpdbg/ini templates are not needed)
+          Copy-Item "$phpDir\*" bin\php -Recurse -Force
+          Remove-Item bin\php\php-cgi.exe, bin\php\phpdbg.exe, bin\php\php-win.exe, bin\php\*.pdb, bin\php\php.ini* -Force -ErrorAction SilentlyContinue
+
+          # webrtc extension + libdatachannel dlls (never overwrite PHP's own openssl dlls)
+          Copy-Item "$stack\php_webrtc.dll" bin\php\ext\php_webrtc.dll -Force
+          Get-ChildItem "$stack\libdatachannel\bin" -Filter *.dll | ForEach-Object {
+            $target = Join-Path bin\php $_.Name
+            if (-not (Test-Path $target)) { Copy-Item $_.FullName $target }
+          }
+
+          # native library (loaded through FFI)
+          Copy-Item native\windows\raspberry_native.dll bin\native\ -Force
+
+          # ssl extras expected by start.cmd
+          New-Item -ItemType Directory -Force -Path bin\php\extras\ssl | Out-Null
+          if (-not (Test-Path bin\php\extras\ssl\openssl.cnf)) { New-Item -ItemType File bin\php\extras\ssl\openssl.cnf | Out-Null }
+          Invoke-WebRequest https://curl.se/ca/cacert.pem -OutFile bin\php\extras\ssl\cacert.pem
+
+          # extensions are loaded by relative path; start.cmd always runs from the project root
+          @"
+          memory_limit=1024M
+          date.timezone=UTC
+          short_open_tag=0
+          zend.assertions=-1
+          error_reporting=-1
+          display_errors=1
+          display_startup_errors=1
+          ffi.enable=1
+          extension_dir=bin/php/ext
+          extension=ffi
+          extension=openssl
+          extension=mbstring
+          extension=sockets
+          extension=webrtc
+          "@ | ForEach-Object { $_ -replace '(?m)^\s+', '' } | Set-Content -Encoding ascii bin\php\php.ini
+
+          .\bin\php\php.exe -c bin\php\php.ini -v
+          $mods = (.\bin\php\php.exe -c bin\php\php.ini -m) -join "`n"
+          foreach ($ext in 'webrtc','ffi','phar','openssl','zlib','json','mbstring') {
+            if ($mods -notmatch "(?mi)^$ext\s*$") { throw "Missing PHP extension in bundle: $ext" }
+          }
+          .\bin\php\php.exe -c bin\php\php.ini -r 'exit(class_exists("pmmp\\webrtc\\PeerConnection") ? 0 : 1);'
+          if ($LASTEXITCODE -ne 0) { throw "pmmp\webrtc\PeerConnection not available" }
+
+      # ONLY bin\ goes into the archive
+      - name: Create Windows bin archive
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-windows | Out-Null
+          Compress-Archive -Path bin -DestinationPath dist-windows\TodiumX-windows-x86_64-bin.zip
+          Get-Item dist-windows\*.zip | Select-Object Name, Length
+
+      - name: Upload Windows bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: todiumx-windows-bin
+          path: dist-windows/TodiumX-windows-x86_64-bin.zip
           retention-days: 30
 
   phar:
@@ -283,7 +391,7 @@ jobs:
   release:
     name: Create Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [build, phar, linux-bin]
+    needs: [build, phar, linux-bin, windows-bin]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -304,7 +412,8 @@ jobs:
           mv dist/server-phar/server.phar release-assets/server.phar 2>/dev/null || true
           mv dist/server-phar/TodiumX.phar release-assets/TodiumX.phar 2>/dev/null || true
           find dist -name "*.phar" -exec mv {} release-assets/ 2>/dev/null \; || true
-          mv dist/todiumx-linux-bundle/TodiumX-stable-linux-x86_64.tar.gz release-assets/ 2>/dev/null || true
+          mv dist/todiumx-linux-bin/TodiumX-linux-x86_64-bin.tar.gz release-assets/ 2>/dev/null || true
+          mv dist/todiumx-windows-bin/TodiumX-windows-x86_64-bin.zip release-assets/ 2>/dev/null || true
           ls -la release-assets/
 
       - name: Create GitHub Release
@@ -319,7 +428,8 @@ jobs:
             release-assets/raspberry_native-windows-x86_64.dll
             release-assets/server.phar
             release-assets/TodiumX.phar
-            release-assets/TodiumX-stable-linux-x86_64.tar.gz
+            release-assets/TodiumX-linux-x86_64-bin.tar.gz
+            release-assets/TodiumX-windows-x86_64-bin.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
