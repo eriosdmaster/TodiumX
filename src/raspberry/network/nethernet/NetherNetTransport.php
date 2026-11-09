@@ -28,6 +28,7 @@ use function array_keys;
 use function explode;
 use function hrtime;
 use function preg_match;
+use function preg_match_all;
 use function strlen;
 use function strtolower;
 use function trim;
@@ -177,6 +178,10 @@ class NetherNetTransport{
 
         $id = $session->getId();
 
+        if($this->logger->isDebug()){
+            $this->logCandidates($id, "remote", $verified["offer"]);
+        }
+
         $this->identities[$id] = $verified["claims"];
         $this->framing[$id] = new NetherNetFraming();
         $this->outgoing[$id] = new SplQueue();
@@ -214,6 +219,10 @@ class NetherNetTransport{
                 ));
 
                 $this->logger->debug("SDP answer sent for session {$id}");
+
+                if($this->logger->isDebug()){
+                    $this->logCandidates($id, "local", $answer);
+                }
             },
 
             static function(WebRtcSession $session, string $candidate, string $mid) : void{},
@@ -303,6 +312,21 @@ class NetherNetTransport{
 
             $queue->dequeue();
             $this->queuedBytes[$id] -= strlen($message);
+        }
+    }
+
+    /**
+     * Debug aid: shows the ICE candidates of an SDP, so a NAT or port problem can be seen in the log.
+     */
+    private function logCandidates(int $id, string $side, string $sdp) : void{
+        if(preg_match_all('/^a=candidate:(.+?)\s*$/m', $sdp, $matches) < 1){
+            $this->logger->debug("Session {$id} {$side} SDP has no ICE candidates");
+
+            return;
+        }
+
+        foreach($matches[1] as $candidate){
+            $this->logger->debug("Session {$id} {$side} candidate: {$candidate}");
         }
     }
 

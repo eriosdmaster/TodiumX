@@ -373,6 +373,11 @@ class Server{
         $this->functionRunner = new FunctionRunner($this, $this->behaviorPackManager, new SilentCommandSender($this->permissionManager));
 
         $this->packContentRegistry = new PackContentRegistry($this->logger);
+        // the script engine is the native library, so it has to be loaded before the runtime looks for an engine
+        if(!Native::isLoaded()){
+            $this->loadNative();
+        }
+
         $this->scriptRuntime = new ScriptRuntime($this, Path::join($this->dataPath, "script_runtime"));
         $this->reloadPackContent();
 
@@ -1106,7 +1111,9 @@ class Server{
             "version" => $this->blockStateRegistry->getVersion()
         ]));
 
-        $this->loadNative();
+        if(!Native::isLoaded()){
+            $this->loadNative();
+        }
         $this->loadDefaultWorld($worldName, $worldGenerator, $flatLayers, $worldSeed, $spawnChunkRadius);
 
         $listenAddress = str_contains($serverIp, ":") ? "[{$serverIp}]:{$serverPort}" : "{$serverIp}:{$serverPort}";
