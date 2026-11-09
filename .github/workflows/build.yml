@@ -59,8 +59,8 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            TodiumX-stable/native/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('TodiumX-stable/native/Cargo.toml', 'TodiumX-stable/native/Cargo.lock') }}
+            native/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('native/Cargo.toml', 'native/Cargo.lock') }}
 
       - name: Build native library (release)
         working-directory: native
@@ -79,8 +79,160 @@ jobs:
           path: native/target/${{ env.RUST_TARGET }}/release/${{ env.LIB_NAME }}
           retention-days: 30
 
+  linux-bin:
+    name: Build Linux Binary Bundle
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Linux native library
+        uses: actions/download-artifact@v4
+        with:
+          name: raspberry_native_linux
+          path: native/linux
+
+      - name: Install system PHP + extensions
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php8.3-cli php8.3-common php8.3-openssl php8.3-json php8.3-mbstring php8.3-zlib php8.3-ffi php8.3-curl php8.3-xml php8.3-sqlite3 php8.3-pgsql php8.3-intl php8.3-gd libssl3 libsqlite3-0 libxml2 libxslt1.1 libicu77 libonig5 libsodium23 libzip4 libpng16-16 libpq5 libssh2-1 libbrotli1 libnghttp2-14
+
+      - name: Prepare Linux bin/php from system
+        run: |
+          mkdir -p TodiumX-stable/bin/php/extras/ssl
+          # Copy PHP binary
+          cp "$(which php)" TodiumX-stable/bin/php/php
+          chmod +x TodiumX-stable/bin/php/php
+          # php.ini
+          PHP_INI_DIR=$(php -i | grep "Scan this dir" | awk -F': ' '{print $2}')
+          if [ -z "$PHP_INI_DIR" ]; then PHP_INI_DIR=$(php -i | grep "Loaded Configuration File" | awk -F': ' '{print $2}' | xargs dirname); fi
+          cp "$PHP_INI_DIR/php.ini" TodiumX-stable/bin/php/php.ini 2>/dev/null || php -i | grep "php.ini" | head -1 | awk -F'=> ' '{print $2}' | xargs cp -t TodiumX-stable/bin/php/ 2>/dev/null || true
+          # SSL
+          cp /etc/ssl/openssl.cnf TodiumX-stable/bin/php/extras/ssl/openssl.cnf 2>/dev/null || true
+          cp /etc/ssl/certs/ca-certificates.crt TodiumX-stable/bin/php/extras/ssl/cacert.pem 2>/dev/null || true
+          # Copy required shared libraries (ldd on php binary)
+          ldd "$(which php)" | awk '{print $3}' | grep -E '^/' | sort -u | while read lib; do
+            if [ -f "$lib" ]; then
+              cp "$lib" TodiumX-stable/bin/php/ 2>/dev/null || true
+            fi
+          done
+          # Also copy common extension .so files
+          php -m | grep -v '^$' | while read ext; do
+            EXT_FILE=$(php -i 2>/dev/null | grep -i "extension_dir" | head -1 | awk -F'=> ' '{print $2}' | xargs -I{} find {} -name "${ext}.so" 2>/dev/null | head -1)
+            if [ -n "$EXT_FILE" ] && [ -f "$EXT_FILE" ]; then
+              cp "$EXT_FILE" TodiumX-stable/bin/php/ 2>/dev/null || true
+            fi
+          done
+          ls -la TodiumX-stable/bin/php/
+
+      - name: Copy native library
+        run: |
+          mkdir -p TodiumX-stable/bin/native
+          cp native/linux/libraspberry_native.so TodiumX-stable/bin/native/
+
+      - name: Build PHAR
+        working-directory: TodiumX-stable
+        run: |
+          php -d phar.readonly=0 build/make-server.php
+
+      - name: Verify binary bundle
+        run: |
+          ls -la TodiumX-stable/bin/php/
+          ls -la TodiumX-stable/bin/native/
+          ./start.sh --version 2>&1 || true
+
+      - name: Create Linux release archive
+        run: |
+          cd TodiumX-stable
+          tar -czf ../TodiumX-stable-linux-x86_64.tar.gz --owner=0 --group=0 .
+          ls -la ../TodiumX-stable-linux-x86_64.tar.gz
+
+      - name: Upload Linux bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: todiumx-linux-bundle
+          path: TodiumX-stable-linux-x86_64.tar.gz
+          retention-days: 30
+
+  macos-bin:
+    name: Build macOS Binary Bundle
+    runs-on: macos-latest
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download macOS native library
+        uses: actions/download-artifact@v4
+        with:
+          name: raspberry_native_macos
+          path: native/macos
+
+      - name: Install PHP via Homebrew
+        run: |
+          brew install php@8.3 openssl@3 icu4c oniguruma libzip libpng libpq sqlite zlib brotli nghttp2 curl
+          # Ensure php@8.3 is linked
+          brew link --force --overwrite php@8.3
+
+      - name: Prepare macOS bin/php from Homebrew
+        run: |
+          mkdir -p TodiumX-stable/bin/php/extras/ssl
+          # Copy PHP binary (Homebrew prefix)
+          PHP_PREFIX=$(brew --prefix php@8.3)
+          cp "$PHP_PREFIX/bin/php" TodiumX-stable/bin/php/php
+          chmod +x TodiumX-stable/bin/php/php
+          # php.ini
+          cp "$PHP_PREFIX/lib/php.ini" TodiumX-stable/bin/php/php.ini 2>/dev/null || cp "$PHP_PREFIX/etc/php/8.3/php.ini" TodiumX-stable/bin/php/php.ini 2>/dev/null || true
+          # SSL
+          OPENSSL_PREFIX=$(brew --prefix openssl@3)
+          cp "$OPENSSL_PREFIX/share/openssl.cnf" TodiumX-stable/bin/php/extras/ssl/openssl.cnf 2>/dev/null || true
+          cp "$OPENSSL_PREFIX/etc/openssl@3/cert.pem" TodiumX-stable/bin/php/extras/ssl/cacert.pem 2>/dev/null || cp /etc/ssl/cert.pem TodiumX-stable/bin/php/extras/ssl/cacert.pem 2>/dev/null || true
+          # Copy dylibs from Homebrew lib dirs
+          for libdir in "$PHP_PREFIX/lib" "$OPENSSL_PREFIX/lib" "/opt/homebrew/opt/icu4c/lib" "/opt/homebrew/opt/oniguruma/lib" "/opt/homebrew/opt/libzip/lib" "/opt/homebrew/opt/libpng/lib" "/opt/homebrew/opt/libpq/lib" "/opt/homebrew/opt/sqlite/lib" "/opt/homebrew/opt/brotli/lib" "/opt/homebrew/opt/nghttp2/lib"; do
+            if [ -d "$libdir" ]; then
+              cp "$libdir"/*.dylib TodiumX-stable/bin/php/ 2>/dev/null || true
+            fi
+          done
+          # Also copy system libs that PHP depends on
+          otool -L "$PHP_PREFIX/bin/php" | awk '{print $1}' | grep -E '\.dylib$' | sort -u | while read lib; do
+            if [ -f "$lib" ]; then
+              cp "$lib" TodiumX-stable/bin/php/ 2>/dev/null || true
+            fi
+          done
+          ls -la TodiumX-stable/bin/php/
+
+      - name: Copy native library
+        run: |
+          mkdir -p TodiumX-stable/bin/native
+          cp native/macos/libraspberry_native.dylib TodiumX-stable/bin/native/
+
+      - name: Build PHAR
+        working-directory: TodiumX-stable
+        run: |
+          php -d phar.readonly=0 build/make-server.php
+
+      - name: Verify binary bundle
+        run: |
+          ls -la TodiumX-stable/bin/php/
+          ls -la TodiumX-stable/bin/native/
+          ./start.sh --version 2>&1 || true
+
+      - name: Create macOS release archive
+        run: |
+          cd TodiumX-stable
+          tar -czf ../TodiumX-stable-macos-x86_64.tar.gz --owner=0 --group=0 .
+          ls -la ../TodiumX-stable-macos-x86_64.tar.gz
+
+      - name: Upload macOS bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: todiumx-macos-bundle
+          path: TodiumX-stable-macos-x86_64.tar.gz
+          retention-days: 30
+
   phar:
-    name: Build PHAR
+    name: Build PHAR (CI)
     runs-on: ubuntu-latest
     needs: build
     env:
@@ -111,9 +263,7 @@ jobs:
         working-directory: TodiumX-stable
         run: |
           mkdir -p bin/native
-          # native artifacts downloaded to ./native/ (flat)
           ls -la ../native/
-          # Copy linux .so (we're on ubuntu)
           cp ../native/libraspberry_native.so bin/native/ 2>/dev/null || true
           cp ../native/raspberry_native.dll bin/native/ 2>/dev/null || true
           cp ../native/libraspberry_native.dylib bin/native/ 2>/dev/null || true
@@ -123,9 +273,6 @@ jobs:
         working-directory: TodiumX-stable
         run: |
           php -d phar.readonly=0 build/make-server.php
-          # copy native library into bin/native for distribution
-          mkdir -p bin/native
-          cp ../native/libraspberry_native.so bin/native/ 2>/dev/null || true
 
       - name: Verify PHAR
         working-directory: TodiumX-stable
@@ -145,7 +292,7 @@ jobs:
   release:
     name: Create Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [build, phar]
+    needs: [build, phar, linux-bin, macos-bin]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -158,17 +305,18 @@ jobs:
       - name: Prepare release assets
         run: |
           ls -la dist/
-          # Flatten artifacts
           mkdir -p release-assets
-          # native libs (artifact names as folders)
+          # native libs
           mv dist/raspberry_native_linux/libraspberry_native.so release-assets/raspberry_native-linux-x86_64.so 2>/dev/null || true
           mv dist/raspberry_native_macos/libraspberry_native.dylib release-assets/raspberry_native-macos-x86_64.dylib 2>/dev/null || true
           mv dist/raspberry_native_windows/raspberry_native.dll release-assets/raspberry_native-windows-x86_64.dll 2>/dev/null || true
-          # phar (may be in bin/ or root)
+          # phar
           mv dist/server-phar/server.phar release-assets/server.phar 2>/dev/null || true
           mv dist/server-phar/RaspberryX.phar release-assets/RaspberryX.phar 2>/dev/null || true
-          # fallback: find any phar
           find dist -name "*.phar" -exec mv {} release-assets/ 2>/dev/null \; || true
+          # linux/macos bundles
+          mv dist/todiumx-linux-bundle/TodiumX-stable-linux-x86_64.tar.gz release-assets/ 2>/dev/null || true
+          mv dist/todiumx-macos-bundle/TodiumX-stable-macos-x86_64.tar.gz release-assets/ 2>/dev/null || true
           ls -la release-assets/
 
       - name: Create GitHub Release
@@ -184,6 +332,8 @@ jobs:
             release-assets/raspberry_native-windows-x86_64.dll
             release-assets/server.phar
             release-assets/RaspberryX.phar
+            release-assets/TodiumX-stable-linux-x86_64.tar.gz
+            release-assets/TodiumX-stable-macos-x86_64.tar.gz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
