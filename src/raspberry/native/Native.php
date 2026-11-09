@@ -54,6 +54,13 @@ class Native{
         int32_t rx_script_eval(uint64_t handle, const char* code);
         int32_t rx_script_poll_log(uint64_t handle, char** out, size_t* out_len);
         void rx_script_free(uint64_t handle);
+
+        uint64_t rx_bridge_new(const char* pack_name, const char* shim_js);
+        int32_t rx_bridge_eval(uint64_t handle, const char* code);
+        int32_t rx_bridge_poll_request(uint64_t handle, char** out_method, size_t* out_method_len, char** out_params, size_t* out_params_len);
+        int32_t rx_bridge_submit_response(uint64_t handle, uint64_t request_id, const char* result_json, const char* error_json);
+        int32_t rx_bridge_poll_log(uint64_t handle, char** out, size_t* out_len);
+        void rx_bridge_free(uint64_t handle);
         C;
 
     private static ?FFI $ffi = null;
@@ -115,6 +122,13 @@ class Native{
     }
 
     public static function isLoaded() : bool{
+        return self::$ffi !== null;
+    }
+
+    /**
+     * Whether the library is loaded and speaks the right ABI, so the embedded script engine can be used.
+     */
+    public static function isAvailable() : bool{
         return self::$ffi !== null;
     }
 
