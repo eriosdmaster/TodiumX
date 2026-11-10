@@ -205,6 +205,7 @@ class NetherNetTransport{
                     throw new RuntimeException("No pending signaling request");
                 }
 
+                $answer = WebRtcSession::rewriteAnswer($answer);
                 $signedAnswer = $this->identity->signAnswer($answer);
 
                 unset($this->pending[$id], $this->pendingSince[$id]);

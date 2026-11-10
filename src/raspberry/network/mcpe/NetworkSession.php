@@ -432,6 +432,23 @@ class NetworkSession{
                 $this->handleText($this->decode($buffer, TextPacket::class));
                 return;
 
+            case ProtocolPacketIds::PACKET_VIOLATION_WARNING_PACKET:
+                try{
+                    $reader = new \raspberry\network\encoding\BinaryReader($buffer);
+                    $reader->readUnsignedVarInt(); //header
+                    $violationType = $reader->readVarInt();
+                    $severity = $reader->readVarInt();
+                    $violatingPacket = $reader->readVarInt();
+                    $context = $reader->readString(4096);
+                    $this->server->getLogger()->warning(sprintf(
+                        "Client %d reported a packet violation: type=%d (0=malformed, 1=unknown packet), severity=%d, packet=0x%03X, context=\"%s\"",
+                        $this->id, $violationType, $severity, $violatingPacket, $context
+                    ));
+                }catch(\Throwable $exception){
+                    $this->server->getLogger()->warning("Client {$this->id} sent a packet violation warning that could not be read: " . $exception->getMessage() . " (hex " . bin2hex($buffer) . ")");
+                }
+                return;
+
             case ProtocolPacketIds::RESOURCE_PACKS_INFO_PACKET:
             case ProtocolPacketIds::RESOURCE_PACK_STACK_PACKET:
                 throw new UnexpectedValueException("Client sent a server-only resource-pack packet");
@@ -1288,7 +1305,11 @@ class NetworkSession{
             $behaviorManager->getActivePacks()
         );
 
-        $this->sendDataPacket($this->resourcePacks->begin());
+        $info = $this->resourcePacks->begin();
+        $debugWriter = new \raspberry\network\encoding\BinaryWriter();
+        $info->encodePayload($debugWriter);
+        $this->server->getLogger()->debug("Session {$this->id} sending ResourcePacksInfo (" . count($resourceManager->getActivePacks()) . " resource packs): " . bin2hex($debugWriter->getBuffer()));
+        $this->sendDataPacket($info);
     }
 
     private function handleResourcePackResponse(ResourcePackClientResponsePacket $packet) : void{

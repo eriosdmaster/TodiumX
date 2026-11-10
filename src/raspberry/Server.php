@@ -211,7 +211,9 @@ class Server{
         "spawn-chunk-radius" => 4,
         "auto-save-interval" => 300,
         "keep-inventory" => false,
-        "debug-logging" => false
+        "debug-logging" => false,
+        "nethernet-public-ip" => "",
+        "nethernet-udp-port" => 0
     ];
 
     private const TICKS_PER_SECOND = 20;
@@ -1119,6 +1121,12 @@ class Server{
         $listenAddress = str_contains($serverIp, ":") ? "[{$serverIp}]:{$serverPort}" : "{$serverIp}:{$serverPort}";
 
         $this->registerSignalHandlers();
+
+        \raspberry\network\nethernet\WebRtcSession::configureIce(
+            $this->properties->getString("nethernet-public-ip"),
+            $this->properties->getInt("nethernet-udp-port"),
+            $this->logger
+        );
 
         $identity = new NetherNetIdentity(Path::join($this->dataPath, "data", "server-identity.pem"));
 

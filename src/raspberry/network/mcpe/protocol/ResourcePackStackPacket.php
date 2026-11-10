@@ -38,15 +38,6 @@ class ResourcePackStackPacket implements Packet{
     public function encodePayload(BinaryWriter $writer) : void{
         $writer->writeBool($this->mustAccept);
 
-        // Behavior pack stack
-        $writer->writeUnsignedVarInt(count($this->behaviorPacks));
-        foreach($this->behaviorPacks as $pack){
-            $m = $pack->getManifest();
-            $writer->writeString($m->getUuid());
-            $writer->writeString($m->getVersion());
-            $writer->writeString(""); // sub-pack name
-        }
-
         // Resource pack stack
         $writer->writeUnsignedVarInt(count($this->resourcePacks));
         foreach($this->resourcePacks as $pack){
