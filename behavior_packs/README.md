@@ -2,7 +2,7 @@
 
 Put one folder per pack here. Each folder needs a `manifest.json` with a `data`, `script` or `client_data` module.
 
-A pack found here is **not** enabled automatically. Enable it in game or from the console:
+A pack seen for the first time is **enabled automatically** when the server starts (or on `/behaviorpack reload`). A pack you disable stays disabled. A behavior pack may depend on a resource pack in `resource_packs/`. Manage packs in game or from the console:
 
     /behaviorpack list
     /behaviorpack enable "Example Pack"

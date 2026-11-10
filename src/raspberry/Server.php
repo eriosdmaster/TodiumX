@@ -358,13 +358,6 @@ class Server{
         $this->commandMap = new CommandMap($this);
         $this->consoleSender = new ConsoleCommandSender($this->logger, $this->permissionManager);
 
-        $this->behaviorPackManager = new BehaviorPackManager(
-            Path::join($this->dataPath, "behavior_packs"),
-            Path::join($this->dataPath, "behavior_packs.json"),
-            $this->language,
-            $this->logger
-        );
-        $this->behaviorPackManager->load();
         $this->resourcePackManager = new ResourcePackManager(
             Path::join($this->dataPath, "resource_packs"),
             Path::join($this->dataPath, "resource_packs.json"),
@@ -372,6 +365,15 @@ class Server{
             $this->logger
         );
         $this->resourcePackManager->load();
+        $this->behaviorPackManager = new BehaviorPackManager(
+            Path::join($this->dataPath, "behavior_packs"),
+            Path::join($this->dataPath, "behavior_packs.json"),
+            $this->language,
+            $this->logger
+        );
+        //loaded after the resource packs: a behavior pack can depend on one
+        $this->behaviorPackManager->setResourcePackManager($this->resourcePackManager);
+        $this->behaviorPackManager->load();
         $this->functionRunner = new FunctionRunner($this, $this->behaviorPackManager, new SilentCommandSender($this->permissionManager));
 
         $this->packContentRegistry = new PackContentRegistry($this->logger);

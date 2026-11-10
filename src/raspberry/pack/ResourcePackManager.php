@@ -59,6 +59,9 @@ class ResourcePackManager{
     /** @var list<string> uuids in active stack order (dependencies satisfied) */
     private array $active = [];
 
+    /** @var list<string> uuids of every pack the server has already seen; a pack not listed here is new and gets enabled on its own */
+    private array $known = [];
+
     public function __init(string $folder, string $stateFile, Language $language, Logger $logger) : void{
         $this->__construct($folder, $stateFile, $language, $logger);
     }
@@ -75,7 +78,8 @@ class ResourcePackManager{
             mkdir($this->folder, 0777, true);
         }
         $this->scan();
-        $this->enabled = $this->readState();
+        [$this->enabled, $known] = $this->readState();
+        $this->autoEnableNew($known);
         $this->rebuild();
         $this->logger->info("Loaded resource packs: " . count($this->packs) . " found, " . count($this->active) . " active.");
     }
@@ -288,11 +292,11 @@ class ResourcePackManager{
     }
 
     /**
-     * @return list<string>
+     * @return array{list<string>, list<string>} the enabled uuids and the known uuids
      */
     private function readState() : array{
         if(!is_file($this->stateFile)){
-            return [];
+            return [[], []];
         }
         try{
             $contents = file_get_contents($this->stateFile);
@@ -303,21 +307,65 @@ class ResourcePackManager{
             }
         }catch(Throwable $exception){
             $this->logger->warning($this->language->translate("pack.stateInvalid", ["file" => $this->stateFile, "reason" => $exception->getMessage()]));
-            return [];
+            return [[], []];
         }
-        $enabled = [];
+        $enabled = self::uuidList($list);
+        //an older file has no "known" list: then only the enabled packs count as seen
+        $known = isset($data["known"]) && is_array($data["known"]) ? self::uuidList($data["known"]) : $enabled;
+
+        return [$enabled, array_values(array_unique([...$known, ...$enabled]))];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function uuidList(array $list) : array{
+        $result = [];
         foreach($list as $uuid){
-            if(is_string($uuid) && !in_array(strtolower($uuid), $enabled, true)){
-                $enabled[] = strtolower($uuid);
+            if(is_string($uuid) && !in_array(strtolower($uuid), $result, true)){
+                $result[] = strtolower($uuid);
             }
         }
-        return $enabled;
+        return $result;
+    }
+
+    /**
+     * A pack that was never seen before is enabled on its own, so dropping a pack in the folder and restarting is enough.
+     * A pack the owner disabled stays in "known" and is not enabled again.
+     *
+     * @param list<string> $known
+     */
+    private function autoEnableNew(array $known) : void{
+        $handled = [];
+        foreach($this->packs as $uuid => $pack){
+            if(in_array($uuid, $known, true)){
+                continue;
+            }
+            try{
+                $added = [];
+                $this->collectForEnable($pack, $added, []);
+                foreach($added as $addedPack){
+                    $this->enabled[] = $addedPack->getUuid();
+                }
+                $handled[] = $uuid;
+                $this->logger->info("Resource pack \"{$pack->getName()}\" is new and was enabled automatically.");
+            }catch(PackException $exception){
+                $this->logger->warning("Resource pack \"{$pack->getName()}\" could not be enabled yet: " . $exception->getMessage());
+            }
+        }
+        $this->enabled = array_values(array_unique($this->enabled));
+        $newKnown = array_values(array_unique([...$known, ...$handled, ...$this->enabled]));
+        $changed = $handled !== [] || $newKnown !== $known;
+        $this->known = $newKnown;
+        if($changed || !is_file($this->stateFile)){
+            $this->saveState();
+        }
     }
 
     private function saveState() : void{
         $temporary = $this->stateFile . ".tmp";
         try{
-            $json = json_encode(["enabled" => $this->enabled], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+            $json = json_encode(["enabled" => $this->enabled, "known" => array_values(array_unique([...$this->known, ...$this->enabled]))], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
             if(file_put_contents($temporary, $json . "\n", LOCK_EX) === false || !rename($temporary, $this->stateFile)){
                 throw new PackException("the file cannot be written");
             }

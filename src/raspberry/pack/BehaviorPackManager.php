@@ -65,6 +65,11 @@ class BehaviorPackManager{
     /** @var list<string> uuids of the enabled packs whose dependencies are enabled too, in stack order */
     private array $active = [];
 
+    /** @var list<string> uuids of every pack the server has already seen; a pack not listed here is new and gets enabled on its own */
+    private array $known = [];
+
+    private ?ResourcePackManager $resourcePacks = null;
+
     /** @var array<string, McFunction> */
     private array $functions = [];
 
@@ -76,6 +81,17 @@ class BehaviorPackManager{
         $this->stateFile = $stateFile;
         $this->language = $language;
         $this->logger = $logger;
+    }
+
+    /**
+     * A behavior pack may depend on a resource pack (the usual addon layout). Those UUIDs count as found.
+     */
+    public function setResourcePackManager(ResourcePackManager $resourcePacks) : void{
+        $this->resourcePacks = $resourcePacks;
+    }
+
+    private function isResourcePackUuid(string $uuid) : bool{
+        return $this->resourcePacks !== null && $this->resourcePacks->getPack($uuid) !== null;
     }
 
     public function getFolder() : string{
@@ -120,7 +136,8 @@ class BehaviorPackManager{
             $this->packs[$manifest->getUuid()] = new BehaviorPack($path, $entry, $manifest);
         }
 
-        $this->enabled = $this->readState();
+        [$this->enabled, $known] = $this->readState();
+        $this->autoEnableNew($known);
         $this->rebuild();
 
         $this->logger->info($this->language->translate("pack.found", [
@@ -200,7 +217,7 @@ class BehaviorPackManager{
      */
     public function findMissingDependency(BehaviorPack $pack) : ?string{
         foreach($pack->getManifest()->getDependencies() as $uuid){
-            if(!isset($this->packs[$uuid])){
+            if(!isset($this->packs[$uuid]) && !$this->isResourcePackUuid($uuid)){
                 return $uuid;
             }
         }
@@ -320,6 +337,10 @@ class BehaviorPackManager{
         }
 
         foreach($pack->getManifest()->getDependencies() as $dependency){
+            if(!isset($this->packs[$dependency]) && $this->isResourcePackUuid($dependency)){
+                continue; //a resource pack, handled by ResourcePackManager
+            }
+
             $required = $this->packs[$dependency] ?? throw new PackException("dependency {$dependency} was not found");
             $this->collectForEnable($required, $added, [...$path, $uuid]);
         }
@@ -349,7 +370,7 @@ class BehaviorPackManager{
                 $ready = true;
 
                 foreach($this->packs[$uuid]->getManifest()->getDependencies() as $dependency){
-                    if(!in_array($dependency, $this->active, true)){
+                    if(!in_array($dependency, $this->active, true) && !$this->isResourcePackUuid($dependency)){
                         $ready = false;
                         break;
                     }
@@ -367,7 +388,7 @@ class BehaviorPackManager{
             $pack = $this->packs[$uuid];
 
             foreach($pack->getManifest()->getDependencies() as $dependency){
-                if(!in_array($dependency, $this->active, true)){
+                if(!in_array($dependency, $this->active, true) && !$this->isResourcePackUuid($dependency)){
                     $this->logger->warning($this->language->translate("pack.disabledDependency", ["name" => $pack->getName(), "dependency" => $dependency]));
                     break;
                 }
@@ -414,11 +435,11 @@ class BehaviorPackManager{
     }
 
     /**
-     * @return list<string>
+     * @return array{list<string>, list<string>} the enabled uuids and the known uuids
      */
     private function readState() : array{
         if(!is_file($this->stateFile)){
-            return [];
+            return [[], []];
         }
 
         try{
@@ -431,25 +452,76 @@ class BehaviorPackManager{
             }
         }catch(Throwable $exception){
             $this->logger->warning($this->language->translate("pack.stateInvalid", ["file" => $this->stateFile, "reason" => $exception->getMessage()]));
-            return [];
+            return [[], []];
         }
 
-        $enabled = [];
+        $enabled = self::uuidList($list);
+        //an older file has no "known" list: then only the enabled packs count as seen
+        $known = isset($data["known"]) && is_array($data["known"]) ? self::uuidList($data["known"]) : $enabled;
+
+        return [$enabled, array_values(array_unique([...$known, ...$enabled]))];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function uuidList(array $list) : array{
+        $result = [];
 
         foreach($list as $uuid){
-            if(is_string($uuid) && !in_array(strtolower($uuid), $enabled, true)){
-                $enabled[] = strtolower($uuid);
+            if(is_string($uuid) && !in_array(strtolower($uuid), $result, true)){
+                $result[] = strtolower($uuid);
             }
         }
 
-        return $enabled;
+        return $result;
+    }
+
+    /**
+     * A pack that was never seen before is enabled on its own, so dropping a pack in the folder and restarting is enough.
+     * A pack the owner disabled stays in "known" and is not enabled again.
+     *
+     * @param list<string> $known
+     */
+    private function autoEnableNew(array $known) : void{
+        $handled = [];
+
+        foreach($this->packs as $uuid => $pack){
+            if(in_array($uuid, $known, true)){
+                continue;
+            }
+
+            try{
+                $added = [];
+                $this->collectForEnable($pack, $added, []);
+
+                foreach($added as $addedPack){
+                    $this->enabled[] = $addedPack->getUuid();
+                }
+
+                $handled[] = $uuid;
+                $this->logger->info("Behavior pack \"{$pack->getName()}\" is new and was enabled automatically.");
+            }catch(PackException $exception){
+                //not marked as known: it is tried again on the next load, when its dependency may be there
+                $this->logger->warning("Behavior pack \"{$pack->getName()}\" could not be enabled yet: " . $exception->getMessage());
+            }
+        }
+
+        $this->enabled = array_values(array_unique($this->enabled));
+        $newKnown = array_values(array_unique([...$known, ...$handled, ...$this->enabled]));
+        $changed = $handled !== [] || $newKnown !== $known;
+        $this->known = $newKnown;
+
+        if($changed || !is_file($this->stateFile)){
+            $this->saveState();
+        }
     }
 
     private function saveState() : void{
         $temporary = $this->stateFile . ".tmp";
 
         try{
-            $json = json_encode(["enabled" => $this->enabled], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
+            $json = json_encode(["enabled" => $this->enabled, "known" => array_values(array_unique([...$this->known, ...$this->enabled]))], JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR);
 
             if(file_put_contents($temporary, $json . "\n", LOCK_EX) === false || !rename($temporary, $this->stateFile)){
                 throw new PackException("the file cannot be written");
