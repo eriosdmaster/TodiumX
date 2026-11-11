@@ -159,6 +159,22 @@ class PackContentRegistry{
     }
 
     private function extractIdentifier(array $def, array $a, array $b) : ?string{
+        // Add-on definitions wrap their description under a namespaced root
+        // (for example minecraft:item.description.identifier). Keep this
+        // lookup explicit and tolerant of legacy/malformed siblings.
+        foreach($a as $rootKey){
+            $root = $def[$rootKey] ?? null;
+            if(!is_array($root)){
+                continue;
+            }
+            $description = $root["description"] ?? null;
+            if(is_array($description) && is_string($description["identifier"] ?? null)){
+                $identifier = trim($description["identifier"]);
+                if($identifier !== ""){
+                    return $identifier;
+                }
+            }
+        }
         return null;
     }
 
@@ -174,4 +190,26 @@ class PackContentRegistry{
     public function hasCustomItems() : bool{ return count($this->customItems) > 0; }
     public function hasCustomBlocks() : bool{ return count($this->customBlocks) > 0; }
     public function hasCustomEntities() : bool{ return count($this->customEntities) > 0; }
+
+    /** @return array<string, mixed>|null */
+    public function getCustomEntityDefinition(string $identifier) : ?array{
+        return $this->customEntities[strtolower(trim($identifier))]["definition"] ?? null;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getCustomItemDefinition(string $identifier) : ?array{
+        return $this->customItems[strtolower(trim($identifier))]["definition"] ?? null;
+    }
+
+    /** @param array<string, mixed> $definition */
+    public function registerCustomItem(string $identifier, array $definition) : void{
+        $identifier = strtolower(trim($identifier));
+        if(!isset($definition["minecraft:item"])){
+            $definition = ["format_version" => "1.21.0", "minecraft:item" => [
+                "description" => ["identifier" => $identifier],
+                "components" => is_array($definition["components"] ?? null) ? $definition["components"] : [],
+            ]];
+        }
+        $this->customItems[$identifier] = ["definition" => $definition, "pack" => "plugin", "identifier" => $identifier];
+    }
 }

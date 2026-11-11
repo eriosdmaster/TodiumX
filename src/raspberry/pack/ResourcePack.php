@@ -107,7 +107,9 @@ final class ResourcePack{
         if(!is_string($contents)){
             throw new PackException("manifest.json is unreadable in archive");
         }
-        $temp = $archivePath . ".manifest.json.tmp";
+        // Keep metadata reads independent from the pack directory's write
+        // permissions (archives are often copied from read-only locations).
+        $temp = sys_get_temp_dir() . "/todiumx_manifest_" . md5($archivePath . $contents) . ".json";
         if(file_put_contents($temp, $contents) === false){
             throw new PackException("failed to read manifest from archive");
         }
@@ -174,7 +176,7 @@ final class ResourcePack{
         $length = strlen($root);
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
         foreach($iterator as $file){
-            if(!$file instanceof SplFileInfo || !$file->isFile()){
+            if(!$file instanceof SplFileInfo || !$file->isFile() || $file->isLink()){
                 continue;
             }
             $full = $file->getPathname();

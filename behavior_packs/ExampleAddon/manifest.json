@@ -24,6 +24,17 @@
         0,
         0
       ]
+    },
+    {
+      "type": "script",
+      "language": "javascript",
+      "uuid": "5c90d781-4b32-4b4e-a51d-93f3dc80cb10",
+      "version": [
+        1,
+        0,
+        0
+      ],
+      "entry": "scripts/main.js"
     }
   ],
   "dependencies": [
@@ -34,6 +45,10 @@
         0,
         0
       ]
+    },
+    {
+      "module_name": "@minecraft/server",
+      "version": "1.0.0"
     }
   ]
 }

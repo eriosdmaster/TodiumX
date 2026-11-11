@@ -52,6 +52,28 @@ class Main extends PluginBase {
 
 Useful APIs: `$this->getServer()`, `$this->getLogger()`, `$this->getDataFolder()` (auto-created under `<data>/plugins/<Name>/`), `$this->getDescription()`.
 
+`PluginBase` also provides protected helpers for runtime content:
+
+```php
+public function onEnable() : void {
+    $this->registerCustomItem("myplugin:token", [
+        "minecraft:max_stack_size" => 16,
+        "minecraft:icon" => ["texture" => "myplugin.token"],
+        "minecraft:display_name" => ["value" => "Token"],
+    ]);
+
+    // This registers a plugin identifier backed by a vanilla state. Client-side
+    // custom block palette and texture registration are not implemented yet.
+    $this->registerCustomBlock("myplugin:marble", "minecraft:quartz_block");
+    $this->placeCustomBlock($this->getServer()->getWorldManager()->getDefaultWorld(), 0, 70, 0, "myplugin:marble");
+
+    // Spawn any custom entity loaded from an active behavior pack.
+    $this->spawnCustomEntity("example:mob", 2.5, 70, 0.5);
+}
+```
+
+Custom items are added to the server item registry and can be given by identifier. Custom block helpers currently map identifiers to vanilla fallback states; they do not register a new Bedrock block palette entry. `spawnCustomEntity()` instantiates active pack definitions, sends the actor to clients, and ticks the supported movement behaviors (`random_stroll`, follow/target behaviors) on the server.
+
 ## Events
 Implement `raspberry\event\Listener` and register handlers:
 ```php

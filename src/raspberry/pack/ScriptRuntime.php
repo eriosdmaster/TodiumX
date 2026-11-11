@@ -416,14 +416,42 @@ use const JSON_UNESCAPED_UNICODE;
     return await globalThis.__mc_bridge_call(method, params);
   }
 
+  function entityFacade(data){
+    if(!data || data.__type !== 'Entity') return data;
+    data.teleport = function(location){ return bridgeCall('entity.teleport', {id:data.id,location:location||{}}); };
+    data.applyDamage = function(amount){ return bridgeCall('entity.applyDamage', {id:data.id,amount:amount}); };
+    data.remove = function(){ return bridgeCall('entity.remove', {id:data.id}); };
+    data.setNameTag = function(nameTag){ data.nameTag=nameTag; return bridgeCall('entity.setNameTag', {id:data.id,nameTag:nameTag}); };
+    data.getComponent = function(componentId){ return bridgeCall('entity.getComponent', {id:data.id,componentId:componentId}).then(function(c){
+      if(c && c.__type === 'EntityHealthComponent'){
+        c.setCurrentValue = function(value){ return bridgeCall('entity.setHealth', {id:c.entityId,value:value}); };
+        c.resetToMaxValue = function(){ return bridgeCall('entity.setHealth', {id:c.entityId,value:c.effectiveMax}); };
+      }
+      return c;
+    }); };
+    data.hasComponent = function(componentId){ return bridgeCall('entity.hasComponent', {id:data.id,componentId:componentId}); };
+    return data;
+  }
+
   var world = {
     sendMessage: function(msg){ return bridgeCall('world.sendMessage', {message: msg}); },
     getPlayers: function(){ return bridgeCall('world.getAllPlayers', {}); },
     getPlayer: function(opts){ return bridgeCall('world.getPlayer', opts||{}); },
     runCommand: function(cmd){ return bridgeCall('world.runCommand', {command: cmd}); },
     runCommandAsync: function(cmd){ return bridgeCall('world.runCommandAsync', {command: cmd}); },
-    getDimension: function(id){ return bridgeCall('world.getDimension', {id: id||'minecraft:overworld'}); },
-    getEntity: function(id){ return bridgeCall('world.getEntity', {id: id}); },
+    getDimension: function(id){
+      const dimensionId = id || 'minecraft:overworld';
+      return {
+        id: dimensionId,
+        spawnEntity: function(typeId, location){ return bridgeCall('dimension.spawnEntity', {dimensionId:dimensionId,typeId:typeId,location:location||{}}).then(entityFacade); },
+        getEntities: function(){ return bridgeCall('dimension.getEntities', {dimensionId:dimensionId}).then(function(list){ return (list||[]).map(entityFacade); }); },
+        getBlock: function(location){ return bridgeCall('dimension.getBlock', {dimensionId:dimensionId,location:location||{}}); },
+        setBlock: function(location, typeId){ return bridgeCall('dimension.setBlock', {dimensionId:dimensionId,location:location||{},typeId:typeId}); },
+        runCommand: function(command){ return bridgeCall('dimension.runCommand', {dimensionId:dimensionId,command:command}); },
+        runCommandAsync: function(command){ return bridgeCall('dimension.runCommandAsync', {dimensionId:dimensionId,command:command}); }
+      };
+    },
+    getEntity: function(id){ return bridgeCall('world.getEntity', {id: id}).then(entityFacade); },
     afterEvents: makeEvents(),
     beforeEvents: makeEvents(),
     setDynamicProperty: function(id,val){ return bridgeCall('world.setDynamicProperty', {id:id,value:val}); },

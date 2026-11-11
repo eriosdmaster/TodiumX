@@ -76,6 +76,7 @@ use raspberry\network\mcpe\convert\CommandDataAdapter;
 use raspberry\block\BlockState;
 
 use raspberry\entity\Entity;
+use raspberry\entity\CustomEntity;
 use raspberry\entity\Human;
 use raspberry\entity\Living;
 use raspberry\entity\effect\Effect;
@@ -730,6 +731,30 @@ class NetworkSession{
             return;
         }
 
+        if($entity instanceof CustomEntity){
+            $position = $entity->getPosition();
+            $metadata = new EntityMetadata();
+            $metadata->setLong(EntityMetadata::KEY_FLAGS_TWO, 0);
+            $metadata->setFloat(EntityMetadata::KEY_SCALE, 1.0);
+            $metadata->setFloat(EntityMetadata::KEY_WIDTH, $entity->getWidth());
+            $metadata->setFloat(EntityMetadata::KEY_HEIGHT, $entity->getHeight());
+            $metadata->setString(EntityMetadata::KEY_NAME, $entity->getNameTag());
+            $metadata->setFlag(EntityMetadata::FLAG_HAS_GRAVITY);
+            $metadata->setFlag(EntityMetadata::FLAG_HAS_COLLISION);
+            $packet = new AddActorPacket();
+            $packet->actorRuntimeId = $entity->getId();
+            $packet->type = $entity->getNetworkTypeId();
+            $packet->x = $position->x;
+            $packet->y = $position->y;
+            $packet->z = $position->z;
+            $packet->yaw = $entity->getYaw();
+            $packet->pitch = $entity->getPitch();
+            $packet->metadata = $metadata;
+            $this->sendDataPacket($packet);
+            $this->sendCustomEntityAttributes($entity);
+            return;
+        }
+
         if(!$entity instanceof Human){
             return; //TODO: AddActorPacket for other entities
         }
@@ -763,6 +788,23 @@ class NetworkSession{
                 $this->sendOffHandItem($entity);
             }
         }
+    }
+
+    public function sendCustomEntityMetadata(CustomEntity $entity) : void{
+        $metadata = new EntityMetadata();
+        $metadata->setLong(EntityMetadata::KEY_FLAGS_TWO, 0);
+        $metadata->setFloat(EntityMetadata::KEY_SCALE, 1.0);
+        $metadata->setFloat(EntityMetadata::KEY_WIDTH, $entity->getWidth());
+        $metadata->setFloat(EntityMetadata::KEY_HEIGHT, $entity->getHeight());
+        $metadata->setString(EntityMetadata::KEY_NAME, $entity->getNameTag());
+        $this->sendDataPacket(SetActorDataPacket::create($entity->getId(), $metadata, $this->server->getCurrentTick()));
+    }
+
+    public function sendCustomEntityAttributes(CustomEntity $entity) : void{
+        $attributes = [
+            new \raspberry\network\mcpe\protocol\types\Attribute(\raspberry\network\mcpe\protocol\types\Attribute::HEALTH, 0.0, $entity->getMaxHealth(), $entity->getHealth(), $entity->getMaxHealth()),
+        ];
+        $this->sendDataPacket(UpdateAttributesPacket::create($entity->getId(), $attributes, $this->server->getCurrentTick()));
     }
 
     private function spawnItemEntity(ItemEntity $entity) : void{

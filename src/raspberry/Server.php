@@ -152,6 +152,9 @@ use raspberry\utils\Logger;
 use raspberry\utils\TextFormat;
 
 use raspberry\block\BlockStateRegistry;
+use raspberry\block\BlockState;
+use raspberry\entity\CustomEntity;
+use raspberry\math\Vector3;
 
 use React\EventLoop\Loop;
 
@@ -267,6 +270,9 @@ class Server{
 
     /** @var list<Item> the creative items in the order of the creative content */
     private array $creativeItems = [];
+
+    /** @var array<string, string> plugin custom block identifier => vanilla fallback state identifier */
+    private array $pluginCustomBlocks = [];
 
     private ?NetherNetTransport $transport = null;
 
@@ -440,18 +446,77 @@ class Server{
         $this->scriptRuntime->startModules($this->packContentRegistry->getScriptModules());
     }
 
+    public function spawnCustomEntity(string $identifier, Vector3 $position, ?\raspberry\world\World $world = null) : ?CustomEntity{
+        $definition = $this->packContentRegistry->getCustomEntityDefinition($identifier);
+        if($definition === null){
+            return null;
+        }
+        $world ??= $this->worldManager->getDefaultWorld();
+        return new CustomEntity($world, $position, $identifier, $definition);
+    }
+
+    public function registerPluginCustomItem(string $identifier, array $definition = []) : int{
+        if(!preg_match('/^[a-z0-9_.-]+:[a-z0-9_.-]+$/D', strtolower($identifier))){
+            throw new \InvalidArgumentException("Custom item identifier must use namespace:name format");
+        }
+        $identifier = strtolower($identifier);
+        if(!isset($definition["minecraft:item"])){
+            $definition = ["minecraft:item" => ["description" => ["identifier" => $identifier], "components" => is_array($definition["components"] ?? null) ? $definition["components"] : []]];
+        }
+        $this->packContentRegistry->registerCustomItem($identifier, $definition);
+        return $this->itemTypeDictionary->registerCustomItem($identifier, true, ItemRegistryPacket::VERSION_DATA_DRIVEN, $this->buildCustomItemComponentsNbt($identifier, $definition));
+    }
+
+    public function registerPluginCustomBlock(string $identifier, string $fallbackBlock = "minecraft:stone") : void{
+        $identifier = strtolower($identifier);
+        if(!preg_match('/^[a-z0-9_.-]+:[a-z0-9_.-]+$/D', $identifier)){
+            throw new \InvalidArgumentException("Custom block identifier must use namespace:name format");
+        }
+        if(!$this->blockStateRegistry->isRegistered($fallbackBlock)){
+            throw new \InvalidArgumentException("Unknown fallback block: {$fallbackBlock}");
+        }
+        $this->pluginCustomBlocks[$identifier] = $fallbackBlock;
+    }
+
+    public function placePluginCustomBlock(\raspberry\world\World $world, int $x, int $y, int $z, string $identifier) : void{
+        $fallback = $this->pluginCustomBlocks[strtolower($identifier)] ?? throw new \InvalidArgumentException("Custom block is not registered: {$identifier}");
+        $world->setBlock($x, $y, $z, $this->blockStateRegistry->getDefaultState($fallback));
+    }
+
+    public function getPluginCustomBlockFallback(string $identifier) : ?string{
+        return $this->pluginCustomBlocks[strtolower($identifier)] ?? null;
+    }
+
     private function buildCustomItemComponentsNbt(string $identifier, array $definition) : string{
         $nbt = new \raspberry\network\mcpe\serializer\NetworkNbtWriter();
+        $item = $definition["minecraft:item"] ?? [];
+        $definitionComponents = is_array($item) && is_array($item["components"] ?? null) ? $item["components"] : [];
+        $stackSize = $definitionComponents["minecraft:max_stack_size"] ?? 64;
+        if(!is_int($stackSize) || $stackSize < 1 || $stackSize > 99){
+            $stackSize = 64;
+        }
+        $icon = $definitionComponents["minecraft:icon"] ?? [];
+        $texture = is_array($icon) ? ($icon["texture"] ?? null) : null;
+        if(!is_string($texture) && is_array($icon["textures"] ?? null)){
+            $texture = $icon["textures"]["default"] ?? null;
+        }
+        if(!is_string($texture) || $texture === ""){
+            $texture = str_replace(":", ".", $identifier);
+        }
+        $displayName = $definitionComponents["minecraft:display_name"]["value"] ?? $identifier;
+        if(!is_string($displayName) || $displayName === ""){
+            $displayName = $identifier;
+        }
         $nbt->startCompound();
         $nbt->startCompound("components");
         $nbt->startCompound("item_properties");
-        $nbt->writeInt("max_stack_size", 64);
+        $nbt->writeInt("max_stack_size", $stackSize);
         $nbt->startCompound("minecraft:icon");
-        $nbt->writeString("texture", str_replace(["minecraft:"], [""], str_replace(":", ".", $identifier)));
+        $nbt->writeString("texture", $texture);
         $nbt->endCompound();
         $nbt->endCompound();
         $nbt->startCompound("minecraft:display_name");
-        $nbt->writeString("value", $identifier);
+        $nbt->writeString("value", $displayName);
         $nbt->endCompound();
         $nbt->endCompound();
         $nbt->writeInt("id", 0);

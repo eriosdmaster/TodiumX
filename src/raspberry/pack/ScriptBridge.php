@@ -6,6 +6,9 @@ namespace raspberry\pack;
 
 use raspberry\Server;
 use raspberry\player\Player;
+use raspberry\entity\CustomEntity;
+use raspberry\entity\damage\DamageSource;
+use raspberry\math\Vector3;
 use raspberry\command\ConsoleCommandSender;
 use raspberry\utils\Logger;
 
@@ -63,6 +66,10 @@ class ScriptBridge{
             "world.setDynamicProperty" => $this->setWorldDynamicProperty($params),
             "entity.getComponent", "entity.hasComponent" => $this->entityComponent($method, $params),
             "entity.teleport" => $this->teleportEntity($params),
+            "entity.applyDamage" => $this->applyEntityDamage($params),
+            "entity.setHealth" => $this->setEntityHealth($params),
+            "entity.setNameTag" => $this->setEntityNameTag($params),
+            "entity.remove" => $this->removeEntity($params),
             "entity.sendMessage" => $this->entitySendMessage($params),
             "player.sendMessage" => $this->playerSendMessage($params),
             "player.runCommand", "player.runCommandAsync" => $this->playerRunCommand($params),
@@ -177,15 +184,14 @@ class ScriptBridge{
             if($p->getId() === (int)$id) return $this->serializePlayer($p);
         }
         // check world entities
-        $world = $this->server->getWorldManager()->getDefaultWorld();
-        if($world !== null && method_exists($world, "getEntities")){
+        foreach($this->server->getWorldManager()->getWorlds() as $world){
             foreach($world->getEntities() as $e){
                 if(method_exists($e, "getId") && $e->getId() === (int)$id){
                     $pos = method_exists($e, "getPosition") ? $e->getPosition() : null;
                     return [
                         "__type" => "Entity",
                         "id" => $e->getId(),
-                        "typeId" => method_exists($e, "getTypeId") ? $e->getTypeId() : (method_exists($e, "getName") ? $e->getName() : "unknown"),
+                        "typeId" => method_exists($e, "getNetworkTypeId") ? $e->getNetworkTypeId() : (method_exists($e, "getTypeId") ? $e->getTypeId() : "unknown"),
                         "nameTag" => method_exists($e, "getNameTag") ? $e->getNameTag() : "",
                         "location" => $pos ? ["x"=>$pos->x,"y"=>$pos->y,"z"=>$pos->z] : ["x"=>0,"y"=>0,"z"=>0],
                         "isValid" => method_exists($e, "isClosed") ? !$e->isClosed() : true,
@@ -233,14 +239,54 @@ class ScriptBridge{
     private function teleportEntity(array $params) : bool{
         $target = $this->findPlayer($params) ?? null;
         if($target === null && isset($params["id"])){
-            // entity teleport not fully implemented; try player id
+            foreach($this->server->getWorldManager()->getWorlds() as $candidateWorld){
+                $candidate = $candidateWorld->getEntity((int)$params["id"]);
+                if($candidate instanceof CustomEntity){ $target = $candidate; break; }
+            }
         }
         if($target === null) return false;
         $loc = $params["location"] ?? $params;
         $x = (float)($loc["x"] ?? 0); $y = (float)($loc["y"] ?? 0); $z = (float)($loc["z"] ?? 0);
-        $pos = $target->getPosition();
-        $pos->x = $x; $pos->y = $y; $pos->z = $z;
-        $target->teleport($pos);
+        $target->teleport(new Vector3($x, $y, $z));
+        return true;
+    }
+
+    private function findCustomEntity(int $id) : ?CustomEntity{
+        foreach($this->server->getWorldManager()->getWorlds() as $world){
+            $entity = $world->getEntity($id);
+            if($entity instanceof CustomEntity) return $entity;
+        }
+        return null;
+    }
+
+    private function applyEntityDamage(array $params) : bool{
+        $entity = isset($params["id"]) ? $this->findCustomEntity((int)$params["id"]) : null;
+        if($entity === null) return false;
+        $amount = (float)($params["amount"] ?? 1);
+        if($amount <= 0 || $amount > 2048) return false;
+        $entity->damage(new DamageSource(DamageSource::CAUSE_CUSTOM, $amount));
+        return true;
+    }
+
+    private function setEntityHealth(array $params) : bool{
+        $entity = isset($params["id"]) ? $this->findCustomEntity((int)$params["id"]) : null;
+        if($entity === null || !is_numeric($params["value"] ?? null)) return false;
+        $entity->setHealth((float)$params["value"]);
+        return true;
+    }
+
+    private function setEntityNameTag(array $params) : bool{
+        $entity = isset($params["id"]) ? $this->findCustomEntity((int)$params["id"]) : null;
+        if($entity === null || !is_string($params["nameTag"] ?? null)) return false;
+        $entity->setNameTag($params["nameTag"]);
+        foreach($entity->getViewers() as $viewer){ $viewer->getNetworkSession()->sendCustomEntityMetadata($entity); }
+        return true;
+    }
+
+    private function removeEntity(array $params) : bool{
+        $entity = isset($params["id"]) ? $this->findCustomEntity((int)$params["id"]) : null;
+        if($entity === null) return false;
+        $entity->close();
         return true;
     }
 
@@ -250,9 +296,16 @@ class ScriptBridge{
         $has = $method === "entity.hasComponent";
         $type = (string)($params["componentId"] ?? $params["type"] ?? "");
         $p = $this->findPlayer($params);
-        if($p !== null && str_contains($type, "health")){
+        $entity = null;
+        if($p === null && isset($params["id"])){
+            foreach($this->server->getWorldManager()->getWorlds() as $world){
+                $candidate = $world->getEntity((int)$params["id"]);
+                if($candidate instanceof CustomEntity){ $entity = $candidate; break; }
+            }
+        }
+        if(($p !== null || $entity !== null) && str_contains($type, "health")){
             if($has) return true;
-            return ["__type"=>"EntityHealthComponent","currentValue"=>20,"effectiveMax"=>20,"effectiveMin"=>0];
+            return ["__type"=>"EntityHealthComponent","entityId"=>$entity?->getId(),"currentValue"=>$entity?->getHealth() ?? 20,"effectiveMax"=>$entity?->getMaxHealth() ?? 20,"effectiveMin"=>0];
         }
         if($p !== null && (str_contains($type, "inventory"))){
             if($has) return true;
@@ -280,12 +333,31 @@ class ScriptBridge{
     private function dimensionOperation(string $method, array $params) : mixed{
         $world = $this->server->getWorldManager()->getDefaultWorld();
         if($world === null) return ["__error" => "no world"];
+        if($method === "dimension.spawnEntity"){
+            $typeId = $params["typeId"] ?? $params["identifier"] ?? null;
+            $location = $params["location"] ?? [];
+            if(!is_string($typeId) || !is_array($location)) return ["__error" => "spawnEntity requires typeId and location"];
+            $entity = $this->server->spawnCustomEntity($typeId, new Vector3((float)($location["x"] ?? 0), (float)($location["y"] ?? 0), (float)($location["z"] ?? 0)), $world);
+            if(!$entity instanceof CustomEntity) return ["__error" => "unknown custom entity: {$typeId}"];
+            return ["__type" => "Entity", "id" => $entity->getId(), "typeId" => $entity->getNetworkTypeId(), "nameTag" => $entity->getNameTag(), "isValid" => true];
+        }
+        if($method === "dimension.setBlock"){
+            $location = $params["location"] ?? [];
+            $typeId = $params["typeId"] ?? $params["identifier"] ?? null;
+            if(!is_array($location) || !is_string($typeId)) return ["__error" => "setBlock requires location and typeId"];
+            $x=(int)floor((float)($location["x"]??0)); $y=(int)floor((float)($location["y"]??0)); $z=(int)floor((float)($location["z"]??0));
+            $fallback = $this->server->getPluginCustomBlockFallback($typeId) ?? $typeId;
+            try{
+                $world->setBlock($x, $y, $z, $this->server->getBlockStateRegistry()->getDefaultState($fallback));
+                return true;
+            }catch(Throwable $e){ return ["__error" => $e->getMessage()]; }
+        }
         if($method === "dimension.getEntities"){
             $out = [];
             if(method_exists($world, "getEntities")){
                 foreach($world->getEntities() as $e){
                     $pos = method_exists($e,"getPosition")?$e->getPosition():null;
-                    $out[] = ["__type"=>"Entity","id"=>method_exists($e,"getId")?$e->getId():0,"typeId"=>method_exists($e,"getName")?$e->getName():"entity","location"=>$pos?["x"=>$pos->x,"y"=>$pos->y,"z"=>$pos->z]:["x"=>0,"y"=>0,"z"=>0],"isValid"=>true];
+                    $out[] = ["__type"=>"Entity","id"=>method_exists($e,"getId")?$e->getId():0,"typeId"=>method_exists($e,"getNetworkTypeId")?$e->getNetworkTypeId():(method_exists($e,"getName")?$e->getName():"entity"),"location"=>$pos?["x"=>$pos->x,"y"=>$pos->y,"z"=>$pos->z]:["x"=>0,"y"=>0,"z"=>0],"isValid"=>true];
                 }
             }
             foreach($this->server->getInGamePlayers() as $p){
