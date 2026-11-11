@@ -24,7 +24,7 @@ class ResourcePackChunkDataPacket implements Packet{
         $writer->writeString($this->packId);
         $writer->writeUnsignedInt($this->chunkIndex);
         $writer->writeLong($this->progress);
-        $writer->writeUnsignedInt(strlen($this->data));
+        $writer->writeUnsignedVarInt(strlen($this->data)); //byte array: varuint length prefix
         $writer->writeBytes($this->data);
     }
 
@@ -32,7 +32,7 @@ class ResourcePackChunkDataPacket implements Packet{
         $this->packId = $reader->readString(256);
         $this->chunkIndex = $reader->readUnsignedInt();
         $this->progress = $reader->readLong();
-        $length = $reader->readUnsignedInt();
+        $length = $reader->readUnsignedVarInt();
         $this->data = $reader->readBytes($length);
     }
 }
