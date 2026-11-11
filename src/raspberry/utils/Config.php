@@ -314,7 +314,7 @@ class Config{
     }
 
     private function encodeProperties() : string{
-        $contents = "# RaspberryX configuration - IN TESTING\n";
+        $contents = "# TodiumX configuration - IN TESTING\n";
 
         foreach($this->values as $key => $value){
             $contents .= "{$key}={$value}\n";

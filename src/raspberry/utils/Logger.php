@@ -9,6 +9,7 @@ use function fclose;
 use function fopen;
 use function function_exists;
 use function fwrite;
+use function getenv;
 use function sapi_windows_vt100_support;
 use function stream_isatty;
 use function str_replace;
@@ -24,8 +25,8 @@ final class Logger{
     public const INGAME = "IN-GAME";
 
     private const COLORS = [
-        self::DEBUG => "\e[90m",
-        self::INFO => "",
+        self::DEBUG => "\e[2;32m",
+        self::INFO => "\e[92m",
         self::NOTICE => "\e[96m",
         self::WARNING => "\e[93m",
         self::ERROR => "\e[91m",
@@ -90,7 +91,7 @@ final class Logger{
      * console when it supports them, and removed everywhere else.
      */
     public function log(string $level, string $message) : void{
-        $prefix = "\e[0;35m" . "[" . date("H:i:s") . "]\e[0m [{$level}]: ";
+        $prefix = "\e[0;32m" . "[" . date("H:i:s") . "]\e[0m [{$level}]: ";
 
         if($this->colors){
             $color = self::COLORS[$level] ?? "";
@@ -103,7 +104,7 @@ final class Logger{
         }
 
         if($this->file !== null){
-            fwrite($this->file, "\e[0;35m" . "[" . date("H:i:s") . "]\e[0m [{$level}]: " . TextFormat::clean($message) . PHP_EOL);
+            fwrite($this->file, "[" . date("H:i:s") . "] [{$level}]: " . TextFormat::clean($message) . PHP_EOL);
         }
     }
 
@@ -115,7 +116,8 @@ final class Logger{
     }
 
     private static function enableColors() : bool{
-        if(!stream_isatty(STDOUT)){
+        //hosting panels capture the output through a pipe and still show ANSI colors; NO_COLOR turns them off
+        if(getenv("NO_COLOR") !== false){
             return false;
         }
 

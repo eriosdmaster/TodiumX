@@ -80,7 +80,7 @@ class AddPlayerPacket implements Packet{
         $writer->writeUnsignedVarInt(0); //entity properties: floats
 
         //abilities
-        $writer->writeLong($this->actorRuntimeId); //unique ID (same as runtime ID in RaspberryX)
+        $writer->writeLong($this->actorRuntimeId); //unique ID (same as runtime ID in TodiumX)
         $writer->writeByte(1); //player permissions: member
         $writer->writeByte(0); //command permissions: normal
         $writer->writeUnsignedVarInt(1); //one layer

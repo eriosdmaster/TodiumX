@@ -190,7 +190,7 @@ use function strtolower;
 class Server{
 
     //TODO: create ServerInfo.php and move this
-    public const NAME = "RaspberryX";
+    public const NAME = "TodiumX";
     public const VERSION = "1.0.0-ALPHA1";
 
     public const LICENSE = "GNU Lesser General Public License v3.0";
@@ -1039,7 +1039,7 @@ class Server{
 
     public function start() : void{
         if($this->running){
-            throw new LogicException("RaspberryX is already running");
+            throw new LogicException("TodiumX is already running");
         }
 
         $serverName = $this->properties->getString("server-name");

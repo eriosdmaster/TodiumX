@@ -1,4 +1,4 @@
-# PHP Plugins (TodiumX / RaspberryX)
+# PHP Plugins (TodiumX)
 
 ## Plugin location
 Place folder plugins in your server data `plugins/` directory (same level as `behavior_packs/`, `worlds/`, etc.), for example:

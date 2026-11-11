@@ -16,7 +16,7 @@ use LogicException;
  * Anything that exists in a world and can move: players, mobs, dropped items, arrows...
  *
  * Every entity gets a runtime ID that is unique while the server runs. Bedrock also has a
- * "unique ID", RaspberryX uses the same number for both.
+ * "unique ID", TodiumX uses the same number for both.
  */
 abstract class Entity{
 

@@ -111,7 +111,7 @@ class Native{
         }
 
         if($version !== self::ABI_VERSION){
-            self::$error = "{$path} is version {$version} but this RaspberryX needs version " . self::ABI_VERSION . ", build it again";
+            self::$error = "{$path} is version {$version} but this TodiumX needs version " . self::ABI_VERSION . ", build it again";
             return false;
         }
 

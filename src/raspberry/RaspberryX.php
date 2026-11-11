@@ -18,16 +18,16 @@ use function fwrite;
 use function is_file;
 
 if(PHP_SAPI !== "cli"){
-    exit("RaspberryX must run from the command line.\n");
+    exit("TodiumX must run from the command line.\n");
 }
 
 try{
     if(PHP_VERSION_ID < 80512){
-        throw new RuntimeException("RaspberryX requires PHP 8.5.12 or newer");
+        throw new RuntimeException("TodiumX requires PHP 8.5.12 or newer");
     }
 
     if(PHP_INT_SIZE !== 8){
-        throw new RuntimeException("RaspberryX requires 64-bit PHP");
+        throw new RuntimeException("TodiumX requires 64-bit PHP");
     }
 
     foreach(["phar", "webrtc", "openssl", "json", "zlib", "ffi"] as $extension){
@@ -40,7 +40,7 @@ try{
     $autoload = $codePath . "/vendor/autoload.php";
 
     if(!is_file($autoload)){
-        throw new RuntimeException("Composer dependencies are missing. " . "Install them before starting or building RaspberryX.");
+        throw new RuntimeException("Composer dependencies are missing. " . "Install them before starting or building TodiumX.");
     }
 
     require_once $autoload;

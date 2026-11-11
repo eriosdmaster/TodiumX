@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "ExamplePlugin\\Main",
   "api": "1.0.0",
-  "description": "Example PHP plugin for TodiumX/RaspberryX",
+  "description": "Example PHP plugin for TodiumX",
   "author": "You",
   "commands": {
     "hello": {

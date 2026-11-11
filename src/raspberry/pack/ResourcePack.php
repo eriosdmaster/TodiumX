@@ -23,6 +23,7 @@ use function gzdeflate;
 use function md5;
 use function pack;
 use function sys_get_temp_dir;
+use function bin2hex;
 use function class_exists;
 use function hash_file;
 use function is_dir;
@@ -275,18 +276,24 @@ final class ResourcePack{
         return $this->packSize;
     }
 
+    /**
+     * SHA-256 of the transfer archive. The client compares it with the downloaded bytes, so the packet needs the raw
+     * 32 bytes ($raw = true); the hex form is only for display.
+     */
     public function getSha256(bool $raw = true) : string{
-        if($this->sha256 !== null){
-            return $this->sha256;
+        if($this->sha256 === null){
+            try{
+                $path = $this->getPackBytesPath();
+            }catch(PackException){
+                return "";
+            }
+            $hash = hash_file("sha256", $path, true);
+            if($hash === false){
+                return "";
+            }
+            $this->sha256 = $hash;
         }
-        try{
-            $path = $this->getPackBytesPath();
-        }catch(PackException){
-            return "";
-        }
-        $hash = hash_file("sha256", $path, $raw);
-        $this->sha256 = $hash === false ? "" : $hash;
-        return $this->sha256;
+        return $raw ? $this->sha256 : bin2hex($this->sha256);
     }
 
     /**

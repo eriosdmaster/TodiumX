@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# TodiumX / RaspberryX starter (Linux/macOS)
+# TodiumX starter (Linux/macOS)
 # Detecta PHP embutido em ./bin/php, configura SSL/OpenSSL e executa o PHAR ou source.
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"

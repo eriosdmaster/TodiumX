@@ -1,4 +1,4 @@
-//! The native half of RaspberryX. PHP loads this library through FFI and calls the functions
+//! The native half of TodiumX. PHP loads this library through FFI and calls the functions
 //! below; heavy work runs on worker threads, and PHP collects what finished with rx_poll()
 //! every tick. src/raspberry/native/Native.php has the matching declarations.
 //!

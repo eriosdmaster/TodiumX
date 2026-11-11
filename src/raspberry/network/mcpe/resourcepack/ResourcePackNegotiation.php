@@ -134,7 +134,7 @@ class ResourcePackNegotiation{
             $size = $pack->getPackSize();
             $pk->compressedPackSize = $size;
             $pk->chunkCount = $size <= 0 ? 0 : (int) ceil($size / self::MAX_CHUNK_SIZE);
-            $sha = $pack->getSha256(false);
+            $sha = $pack->getSha256(true);
             $pk->sha256 = is_string($sha) ? $sha : "";
             $pk->isPremium = false;
             $pk->packType = $pack->getManifest()->isResourcePack() ? ResourcePackDataInfoPacket::TYPE_RESOURCES : ResourcePackDataInfoPacket::TYPE_BEHAVIOR;

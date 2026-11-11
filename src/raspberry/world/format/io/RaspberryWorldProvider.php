@@ -22,7 +22,7 @@ use function rename;
 use function time;
 
 /**
- * RaspberryX's own world format:
+ * TodiumX's own world format:
  *
  *   <world>/world.json                         metadata
  *   <world>/chunks/<rx>.<rz>/<x>.<z>.chunk     one file per saved chunk, 32x32 chunks per folder

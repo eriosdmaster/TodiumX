@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generates RaspberryX block data from Mojang's official bedrock-samples repository.
+Generates TodiumX block data from Mojang's official bedrock-samples repository.
 
 Url: https://github.com/Mojang/bedrock-samples
 
@@ -1452,7 +1452,7 @@ def sound_const_name(name):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate RaspberryX block and biome data from Mojang bedrock-samples")
+    parser = argparse.ArgumentParser(description="Generate TodiumX block and biome data from Mojang bedrock-samples")
     parser.add_argument("--version", required=True, help="bedrock-samples release tag without the v, e.g. 1.26.60.5")
     parser.add_argument("--input", help="use a local vanilladata_modules folder instead of downloading")
     args = parser.parse_args()

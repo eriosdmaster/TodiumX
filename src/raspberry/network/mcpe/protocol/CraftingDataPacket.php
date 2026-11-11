@@ -35,7 +35,7 @@ class CraftingDataPacket implements Packet{
     /** @var list<array{int, int, int}> */
     public array $potionContainerRecipes = [];
 
-    /** forget recipes from before (always true, RaspberryX sends everything at once) */
+    /** forget recipes from before (always true, TodiumX sends everything at once) */
     public bool $clearRecipes = true;
 
     public static function getPacketId() : int{

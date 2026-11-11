@@ -107,7 +107,7 @@ final class ChunkSerializer{
     public static function deserialize(string $data, int $expectedX, int $expectedZ) : Chunk{
         try{
             if(strlen($data) < 5 || substr($data, 0, 4) !== self::MAGIC){
-                throw new UnexpectedValueException("Not a RaspberryX chunk file");
+                throw new UnexpectedValueException("Not a TodiumX chunk file");
             }
 
             $version = ord($data[4]);

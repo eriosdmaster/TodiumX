@@ -18,7 +18,7 @@ use function strlen;
 /**
  * Turns block states into the IDs used in network chunk data.
  *
- * RaspberryX enables "block network ID hashes" in StartGame, so a block's network ID is the
+ * TodiumX enables "block network ID hashes" in StartGame, so a block's network ID is the
  * FNV-1a 32-bit hash of its state written as little-endian NBT:
  *   {name: "minecraft:...", states: {property: value, ...}}   (properties sorted by name)
  * The client computes the same hash, so no palette has to be shared with it.

@@ -2,7 +2,7 @@
 name = "raspberry-native"
 version = "0.1.0"
 edition = "2021"
-description = "The native half of RaspberryX: work that is too heavy for PHP, run on its own threads"
+description = "The native half of TodiumX: work that is too heavy for PHP, run on its own threads"
 license = "LGPL-3.0"
 publish = false
 
