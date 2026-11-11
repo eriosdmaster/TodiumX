@@ -1300,8 +1300,17 @@ class NetworkSession{
         $this->state = self::STATE_RESOURCE_PACKS;
         $resourceManager = $this->server->getResourcePackManager();
         $behaviorManager = $this->server->getBehaviorPackManager();
+        $sendable = [];
+        foreach($resourceManager->getActivePacks() as $resourcePack){
+            if($resourcePack->getPackSize() > 0){
+                $sendable[] = $resourcePack;
+            }else{
+                //a pack that cannot be sent would leave the client stuck on "loading resource packs"
+                $this->server->getLogger()->error("Resource pack \"{$resourcePack->getName()}\" cannot be sent to players (its archive could not be created), skipping it.");
+            }
+        }
         $this->resourcePacks = new ResourcePackNegotiation(
-            $resourceManager->getActivePacks(),
+            $sendable,
             $behaviorManager->getActivePacks()
         );
 

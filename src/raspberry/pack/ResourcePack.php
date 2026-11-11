@@ -14,6 +14,16 @@ use function array_values;
 use function file_get_contents;
 use function filesize;
 use function hash;
+use function crc32;
+use function fclose;
+use function fopen;
+use function fwrite;
+use function function_exists;
+use function gzdeflate;
+use function md5;
+use function pack;
+use function sys_get_temp_dir;
+use function class_exists;
 use function hash_file;
 use function is_dir;
 use function is_file;
@@ -151,18 +161,14 @@ final class ResourcePack{
     }
 
     /**
+     * Zips the folder for transfer. Uses ZipArchive when the PHP build has it, and a built-in writer when it does not
+     * (many hosts ship PHP without the zip extension). The zip goes in the pack folder, or in the temp folder when
+     * the pack folder cannot be written.
+     *
      * @throws PackException
      */
     private function buildArchive() : string{
-        if(!class_exists(ZipArchive::class)){
-            throw new PackException("ZipArchive extension is required to transfer folder resource packs");
-        }
-        $target = $this->path . "/.transfer.zip";
-        $zip = new ZipArchive();
-        $flags = ZipArchive::CREATE | ZipArchive::OVERWRITE;
-        if($zip->open($target, $flags) !== true){
-            throw new PackException("could not create transfer archive for resource pack");
-        }
+        $files = [];
         $root = $this->path;
         $length = strlen($root);
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
@@ -172,16 +178,87 @@ final class ResourcePack{
             }
             $full = $file->getPathname();
             $relative = ltrim(str_replace("\\", "/", substr($full, $length)), "/");
-            if($relative === ".transfer.zip" || str_starts_with($relative, ".transfer")){
+            if(str_starts_with($relative, ".transfer")){
                 continue;
             }
-            $zip->addFile($full, $relative);
+            $files[$relative] = $full;
         }
-        $zip->close();
+        ksort($files);
+        if($files === []){
+            throw new PackException("the resource pack folder is empty");
+        }
+
+        $targets = [$this->path . "/.transfer.zip", sys_get_temp_dir() . "/todiumx_" . md5($this->path) . ".zip"];
+        foreach($targets as $target){
+            if(class_exists(ZipArchive::class)){
+                $zip = new ZipArchive();
+                if($zip->open($target, ZipArchive::CREATE | ZipArchive::OVERWRITE) === true){
+                    foreach($files as $relative => $full){
+                        $zip->addFile($full, $relative);
+                    }
+                    if($zip->close() && is_file($target) && filesize($target) > 0){
+                        return $this->archiveBuilt($target);
+                    }
+                }
+            }
+            if(self::writeZip($target, $files)){
+                return $this->archiveBuilt($target);
+            }
+        }
+        throw new PackException("could not create the transfer archive for resource pack \"{$this->folderName}\"");
+    }
+
+    private function archiveBuilt(string $target) : string{
         $this->archivePath = $target;
         $this->sha256 = null;
         $this->packSize = null;
         return $target;
+    }
+
+    /**
+     * Minimal zip writer (no extension needed).
+     *
+     * @param array<string, string> $files name inside the zip => file on disk
+     */
+    private static function writeZip(string $target, array $files) : bool{
+        $handle = @fopen($target, "wb");
+        if($handle === false){
+            return false;
+        }
+        $central = "";
+        $offset = 0;
+        $count = 0;
+        foreach($files as $name => $full){
+            $data = @file_get_contents($full);
+            if($data === false){
+                fclose($handle);
+                return false;
+            }
+            $crc = crc32($data);
+            $size = strlen($data);
+            $method = 0;
+            if(function_exists("gzdeflate") && $size > 0){
+                $deflated = gzdeflate($data, 6);
+                if($deflated !== false && strlen($deflated) < $size){
+                    $data = $deflated;
+                    $method = 8;
+                }
+            }
+            $compressed = strlen($data);
+            $nameLength = strlen($name);
+            $header = pack("VvvvvvVVVvv", 0x04034b50, 20, 0x0800, $method, 0, 0x21, $crc, $compressed, $size, $nameLength, 0) . $name;
+            if(fwrite($handle, $header) === false || fwrite($handle, $data) === false){
+                fclose($handle);
+                return false;
+            }
+            $central .= pack("VvvvvvvVVVvvvvvVV", 0x02014b50, 20, 20, 0x0800, $method, 0, 0x21, $crc, $compressed, $size, $nameLength, 0, 0, 0, 0, 0, $offset) . $name;
+            $offset += strlen($header) + $compressed;
+            $count++;
+        }
+        $end = pack("VvvvvVVv", 0x06054b50, 0, 0, $count, $count, strlen($central), $offset, 0);
+        $ok = fwrite($handle, $central . $end) !== false;
+        fclose($handle);
+        return $ok;
     }
 
     public function getPackSize() : int{
