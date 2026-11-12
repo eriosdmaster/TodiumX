@@ -8,7 +8,9 @@ use raspberry\Server;
 use raspberry\utils\Logger;
 use raspberry\math\Vector3;
 use raspberry\world\World;
+use raspberry\block\BlockState;
 use raspberry\entity\CustomEntity;
+use raspberry\item\Item;
 use raspberry\event\Listener;
 
 abstract class PluginBase implements Plugin{
@@ -78,7 +80,14 @@ abstract class PluginBase implements Plugin{
 
     /** Register a server-side data-driven item; $components uses minecraft:* component keys. */
     final protected function registerCustomItem(string $identifier, array $components = []) : int{
-        return $this->getServer()->registerPluginCustomItem($identifier, ["components" => $components]);
+        return $this->getServer()->registerPluginCustomItem($identifier, $components);
+    }
+
+    final protected function createCustomItem(string $identifier, int $count = 1) : Item{
+        if(!isset($this->getServer()->getPluginContentRegistry()->getItems()[strtolower($identifier)])){
+            throw new PluginException("Custom item is not registered: {$identifier}");
+        }
+        return new Item($identifier, $count);
     }
 
     /**
@@ -91,6 +100,22 @@ abstract class PluginBase implements Plugin{
 
     final protected function placeCustomBlock(World $world, int $x, int $y, int $z, string $identifier) : void{
         $this->getServer()->placePluginCustomBlock($world, $x, $y, $z, $identifier);
+    }
+
+    final protected function getCustomBlockIdAt(World $world, int $x, int $y, int $z) : ?string{
+        return $this->getServer()->getPluginCustomBlockIdAt($world, $x, $y, $z);
+    }
+
+    final protected function getBlock(World $world, int $x, int $y, int $z) : BlockState{
+        return $world->getBlock($x, $y, $z);
+    }
+
+    final protected function setBlock(World $world, int $x, int $y, int $z, BlockState $block) : void{
+        $world->setBlock($x, $y, $z, $block);
+    }
+
+    final protected function registerCustomEntity(string $identifier, array $definition = []) : void{
+        $this->getServer()->registerPluginCustomEntity($identifier, $definition);
     }
 
     final protected function spawnCustomEntity(string $identifier, float $x, float $y, float $z, ?World $world = null) : ?CustomEntity{

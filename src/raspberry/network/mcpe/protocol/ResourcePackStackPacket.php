@@ -6,7 +6,6 @@ namespace raspberry\network\mcpe\protocol;
 
 use raspberry\network\encoding\BinaryReader;
 use raspberry\network\encoding\BinaryWriter;
-use raspberry\pack\BehaviorPack;
 use raspberry\pack\ResourcePack;
 
 use UnexpectedValueException;
@@ -21,9 +20,6 @@ class ResourcePackStackPacket implements Packet{
 
     /** @var list<ResourcePack> */
     public array $resourcePacks = [];
-
-    /** @var list<BehaviorPack> */
-    public array $behaviorPacks = [];
 
     /** @var array<string, bool> experiment name => enabled */
     public array $experiments = [];

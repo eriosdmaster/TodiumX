@@ -9,7 +9,6 @@ use raspberry\network\mcpe\protocol\ResourcePacksInfoPacket;
 use raspberry\network\mcpe\protocol\ResourcePackStackPacket;
 use raspberry\network\mcpe\protocol\ResourcePackClientResponsePacket;
 use raspberry\network\mcpe\protocol\ResourcePackDataInfoPacket;
-use raspberry\pack\BehaviorPack;
 use raspberry\pack\ResourcePack;
 
 use LogicException;
@@ -45,16 +44,11 @@ class ResourcePackNegotiation{
     /** @var list<ResourcePack> */
     private array $resourcePacks = [];
 
-    /** @var list<BehaviorPack> */
-    private array $behaviorPacks = [];
-
     /**
      * @param list<ResourcePack> $resourcePacks active resource packs
-     * @param list<BehaviorPack> $behaviorPacks active behavior packs (server-side; advertised in stack if needed)
      */
-    public function __construct(array $resourcePacks = [], array $behaviorPacks = []){
+    public function __construct(array $resourcePacks = []){
         $this->resourcePacks = array_values($resourcePacks);
-        $this->behaviorPacks = array_values($behaviorPacks);
         foreach($this->resourcePacks as $pack){
             $this->resourcePacksById[strtolower($pack->getUuid())] = $pack;
             $this->resourcePacksById[strtolower($pack->getUuid() . "_" . $pack->getVersion())] = $pack;
@@ -72,23 +66,9 @@ class ResourcePackNegotiation{
 
         $pk = new ResourcePacksInfoPacket();
         $pk->resourcePacks = $this->resourcePacks;
-        $pk->behaviorPacks = []; // behavior packs not sent for download by default
         $pk->mustAccept = false;
         $pk->hasAddons = false;
-        $hasScripts = false;
-        foreach($this->resourcePacks as $pack){
-            if($pack->getManifest()->hasScripts()){
-                $hasScripts = true;
-                break;
-            }
-        }
-        foreach($this->behaviorPacks as $pack){
-            if($pack->getManifest()->hasScripts()){
-                $hasScripts = true;
-                break;
-            }
-        }
-        $pk->hasScripts = $hasScripts;
+        $pk->hasScripts = false;
         return $pk;
     }
 
@@ -137,7 +117,7 @@ class ResourcePackNegotiation{
             $sha = $pack->getSha256(true);
             $pk->sha256 = is_string($sha) ? $sha : "";
             $pk->isPremium = false;
-            $pk->packType = $pack->getManifest()->isResourcePack() ? ResourcePackDataInfoPacket::TYPE_RESOURCES : ResourcePackDataInfoPacket::TYPE_BEHAVIOR;
+            $pk->packType = ResourcePackDataInfoPacket::TYPE_RESOURCES;
             $packets[] = $pk;
         }
         return $packets;
@@ -202,20 +182,8 @@ class ResourcePackNegotiation{
         $pk->mustAccept = false;
         $pk->baseGameVersion = ProtocolInfo::MINECRAFT_VERSION_NETWORK;
         $pk->resourcePacks = $this->resourcePacks;
-        $pk->behaviorPacks = []; // server-side behavior packs
-        // Enable experiments commonly needed for custom content/scripts when packs are present
-        $hasScripts = false;
-        foreach($this->resourcePacks as $pack){
-            if($pack->getManifest()->hasScripts()) $hasScripts = true;
-        }
-        foreach($this->behaviorPacks as $pack){
-            if($pack->getManifest()->hasScripts()) $hasScripts = true;
-        }
-        if($hasScripts || count($this->resourcePacks) > 0 || count($this->behaviorPacks) > 0){
+        if(count($this->resourcePacks) > 0){
             $pk->experiments["data_driven_items"] = true;
-            if($hasScripts){
-                $pk->experiments["beta_apis"] = true;
-            }
             $pk->experimentsPreviouslyToggled = true;
         }
         return $pk;

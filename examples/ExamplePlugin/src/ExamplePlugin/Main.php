@@ -22,6 +22,22 @@ class Main extends PluginBase implements Listener, PluginCommandExecutor{
 
     public function onEnable() : void{
         $this->getServer()->getPluginManager()->registerEvents($this, $this);
+        $this->registerCustomItem("example:token", [
+            "minecraft:max_stack_size" => 16,
+            "minecraft:icon" => ["texture" => "example.token"],
+            "minecraft:display_name" => ["value" => "Example Token"],
+        ]);
+        $this->registerCustomBlock("example:marble", "minecraft:quartz_block");
+        $this->registerCustomEntity("example:scout", [
+            "name" => "Example Scout",
+            "max_health" => 24,
+            "speed" => 0.10,
+            "follow_range" => 16,
+            "follow_players" => true,
+            "wander" => true,
+            "width" => 0.7,
+            "height" => 1.9,
+        ]);
         $this->getLogger()->info("[ExamplePlugin] enabled. Use /hello");
     }
 

@@ -8,7 +8,7 @@ use raspberry\math\Vector3;
 use raspberry\player\Player;
 use raspberry\world\World;
 
-/** A server-side entity instantiated from an active behavior pack definition. */
+/** Server-side entity defined and spawned by a PHP plugin. */
 final class CustomEntity extends Living{
 
     private string $typeId;
@@ -24,31 +24,22 @@ final class CustomEntity extends Living{
     /** @param array<string, mixed> $definition */
     public function __construct(World $world, Vector3 $position, string $typeId, array $definition){
         $this->typeId = strtolower($typeId);
-        $entity = $definition["minecraft:entity"] ?? [];
-        $description = is_array($entity) ? ($entity["description"] ?? []) : [];
-        $components = is_array($entity) ? ($entity["components"] ?? []) : [];
-        $components = is_array($components) ? $components : [];
-
-        $this->nameTag = is_array($description) && is_string($description["name"] ?? null) ? $description["name"] : $this->typeId;
-        $health = $components["minecraft:health"]["value"] ?? null;
+        $this->nameTag = is_string($definition["name"] ?? null) ? $definition["name"] : $this->typeId;
+        $health = $definition["max_health"] ?? $definition["health"] ?? null;
         if(is_numeric($health) && (float)$health > 0){
             $this->maxHealth = (float)$health;
             $this->health = (float)$health;
         }
-        $movement = $components["minecraft:movement"]["value"] ?? null;
+        $movement = $definition["speed"] ?? null;
         if(is_numeric($movement) && (float)$movement >= 0){
             $this->speed = min(0.35, (float)$movement);
         }
-        $followRange = $components["minecraft:follow_range"]["value"] ?? null;
+        $followRange = $definition["follow_range"] ?? null;
         if(is_numeric($followRange)) $this->followRange = min(64.0, max(1.0, (float)$followRange));
-        foreach($components as $component => $_){
-            if(is_string($component) && (str_contains($component, "behavior.nearest_attackable_target") || str_contains($component, "behavior.follow_owner") || str_contains($component, "behavior.follow_parent"))){
-                $this->followsPlayers = true;
-            }
-            if($component === "minecraft:behavior.random_stroll") $this->wanders = true;
-        }
-        $this->width = max(0.1, min(8.0, (float)($components["minecraft:collision_box"]["width"] ?? 0.6)));
-        $this->height = max(0.1, min(16.0, (float)($components["minecraft:collision_box"]["height"] ?? 1.8)));
+        $this->followsPlayers = (bool)($definition["follow_players"] ?? false);
+        $this->wanders = (bool)($definition["wander"] ?? false);
+        $this->width = max(0.1, min(8.0, (float)($definition["width"] ?? 0.6)));
+        $this->height = max(0.1, min(16.0, (float)($definition["height"] ?? 1.8)));
         parent::__construct($world, $position);
     }
 

@@ -6,7 +6,6 @@ namespace raspberry\network\mcpe\protocol;
 
 use raspberry\network\encoding\BinaryReader;
 use raspberry\network\encoding\BinaryWriter;
-use raspberry\pack\BehaviorPack;
 use raspberry\pack\ResourcePack;
 use raspberry\utils\Uuid;
 
@@ -24,9 +23,6 @@ class ResourcePacksInfoPacket implements Packet{
 
     /** @var list<ResourcePack> */
     public array $resourcePacks = [];
-
-    /** @var list<BehaviorPack> */
-    public array $behaviorPacks = [];
 
     public static function getPacketId() : int{
         return ProtocolPacketIds::RESOURCE_PACKS_INFO_PACKET;
@@ -64,7 +60,7 @@ class ResourcePacksInfoPacket implements Packet{
         $writer->writeString("");                    // content key
         $writer->writeString("");                    // sub-pack name
         $writer->writeString($pack->getContentId()); // content identity
-        $writer->writeBool($manifest->hasScripts());
+        $writer->writeBool(false);
         $writer->writeBool(false);                   // is addon pack
         $writer->writeBool(false);                   // is ray tracing capable
         $writer->writeString("");                    // CDN URL

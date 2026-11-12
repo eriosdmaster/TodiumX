@@ -1,0 +1,20 @@
+name = "ExamplePlugin"
+version = "1.0.0"
+main = "ExamplePlugin\\Main"
+api = "1.0.0"
+description = "Example PHP plugin for TodiumX"
+authors = ["You"]
+depend = []
+softdepend = []
+loadbefore = []
+
+[[commands]]
+name = "hello"
+description = "Says hello"
+usage = "/hello"
+permission = "example.hello"
+
+[[permissions]]
+name = "example.hello"
+description = "Allows using /hello"
+default = "true"

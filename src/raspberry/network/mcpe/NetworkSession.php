@@ -1341,7 +1341,6 @@ class NetworkSession{
 
         $this->state = self::STATE_RESOURCE_PACKS;
         $resourceManager = $this->server->getResourcePackManager();
-        $behaviorManager = $this->server->getBehaviorPackManager();
         $sendable = [];
         foreach($resourceManager->getActivePacks() as $resourcePack){
             if($resourcePack->getPackSize() > 0){
@@ -1351,10 +1350,7 @@ class NetworkSession{
                 $this->server->getLogger()->error("Resource pack \"{$resourcePack->getName()}\" cannot be sent to players (its archive could not be created), skipping it.");
             }
         }
-        $this->resourcePacks = new ResourcePackNegotiation(
-            $sendable,
-            $behaviorManager->getActivePacks()
-        );
+        $this->resourcePacks = new ResourcePackNegotiation($sendable);
 
         $info = $this->resourcePacks->begin();
         $debugWriter = new \raspberry\network\encoding\BinaryWriter();

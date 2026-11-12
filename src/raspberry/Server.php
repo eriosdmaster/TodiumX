@@ -111,22 +111,17 @@ use raspberry\command\defaults\StopCommand;
 use raspberry\command\defaults\TellCommand;
 use raspberry\command\defaults\TitleCommand;
 use raspberry\command\defaults\VersionCommand;
-use raspberry\command\defaults\BehaviorPackCommand;
 use raspberry\command\defaults\ClearCommand;
 use raspberry\command\defaults\EffectCommand;
-use raspberry\command\defaults\FunctionCommand;
 use raspberry\command\defaults\GiveCommand;
 
 use raspberry\console\ConsoleReader;
 
 use raspberry\permission\OperatorList;
-use raspberry\pack\BehaviorPackManager;
 use raspberry\pack\ResourcePackManager;
-use raspberry\pack\FunctionRunner;
-use raspberry\pack\PackContentRegistry;
-use raspberry\pack\ScriptRuntime;
 use raspberry\permission\PermissionManager;
 use raspberry\plugin\PluginManager;
+use raspberry\plugin\PluginContentRegistry;
 use raspberry\event\player\PlayerChatEvent;
 use raspberry\event\player\PlayerJoinEvent;
 use raspberry\event\player\PlayerQuitEvent;
@@ -271,9 +266,6 @@ class Server{
     /** @var list<Item> the creative items in the order of the creative content */
     private array $creativeItems = [];
 
-    /** @var array<string, string> plugin custom block identifier => vanilla fallback state identifier */
-    private array $pluginCustomBlocks = [];
-
     private ?NetherNetTransport $transport = null;
 
     /** @var array<int, NetworkSession> keyed by transport session ID */
@@ -289,12 +281,11 @@ class Server{
 
     private ConsoleCommandSender $consoleSender;
 
-    private BehaviorPackManager $behaviorPackManager;
     private ResourcePackManager $resourcePackManager;
-    private FunctionRunner $functionRunner;
-    private PackContentRegistry $packContentRegistry;
-    private ScriptRuntime $scriptRuntime;
+    private PluginContentRegistry $pluginContentRegistry;
     private PluginManager $pluginManager;
+    /** @var array<string, string> world and coordinates => logical plugin block ID */
+    private array $pluginCustomBlockLocations = [];
 
     private ?ConsoleReader $consoleReader = null;
 
@@ -371,25 +362,7 @@ class Server{
             $this->logger
         );
         $this->resourcePackManager->load();
-        $this->behaviorPackManager = new BehaviorPackManager(
-            Path::join($this->dataPath, "behavior_packs"),
-            Path::join($this->dataPath, "behavior_packs.json"),
-            $this->language,
-            $this->logger
-        );
-        //loaded after the resource packs: a behavior pack can depend on one
-        $this->behaviorPackManager->setResourcePackManager($this->resourcePackManager);
-        $this->behaviorPackManager->load();
-        $this->functionRunner = new FunctionRunner($this, $this->behaviorPackManager, new SilentCommandSender($this->permissionManager));
-
-        $this->packContentRegistry = new PackContentRegistry($this->logger);
-        // the script engine is the native library, so it has to be loaded before the runtime looks for an engine
-        if(!Native::isLoaded()){
-            $this->loadNative();
-        }
-
-        $this->scriptRuntime = new ScriptRuntime($this, Path::join($this->dataPath, "script_runtime"));
-        $this->reloadPackContent();
+        $this->pluginContentRegistry = new PluginContentRegistry();
 
         $this->registerCommands();
 
@@ -398,56 +371,20 @@ class Server{
         $this->pluginManager->enablePlugins();
     }
 
-    public function getBehaviorPackManager() : BehaviorPackManager{
-        return $this->behaviorPackManager;
-    }
-
     public function getResourcePackManager() : ResourcePackManager{
         return $this->resourcePackManager;
     }
 
-    public function getPackContentRegistry() : PackContentRegistry{
-        return $this->packContentRegistry;
-    }
-
-    public function getScriptRuntime() : ScriptRuntime{
-        return $this->scriptRuntime;
+    public function getPluginContentRegistry() : PluginContentRegistry{
+        return $this->pluginContentRegistry;
     }
 
     public function getPluginManager() : PluginManager{
         return $this->pluginManager;
     }
 
-    public function reloadPackContent() : void{
-        $packs = [];
-        foreach($this->behaviorPackManager->getActivePacks() as $pack){
-            $packs[] = $pack;
-        }
-        foreach($this->resourcePackManager->getActivePacks() as $pack){
-            $packs[] = $pack;
-        }
-        $this->packContentRegistry->loadFromPacks($packs);
-
-        foreach($this->packContentRegistry->getCustomItems() as $identifier => $info){
-            try{
-                $componentsNbt = $this->buildCustomItemComponentsNbt($identifier, $info["definition"] ?? []);
-                $this->itemTypeDictionary->registerCustomItem($identifier, true, \raspberry\network\mcpe\protocol\ItemRegistryPacket::VERSION_DATA_DRIVEN, $componentsNbt);
-            }catch(\Throwable $e){
-                $this->logger->warning("Failed to register custom item {$identifier}: " . $e->getMessage());
-            }
-        }
-
-        try{
-            \raspberry\network\mcpe\convert\BlockDefinitions::registerFromPackDefinitions($this->packContentRegistry->getCustomBlocks());
-        }catch(\Throwable $e){
-            $this->logger->warning("Failed to register custom blocks: " . $e->getMessage());
-        }
-
-        $this->scriptRuntime->startModules($this->packContentRegistry->getScriptModules());
-    }
-
     public function spawnCustomEntity(string $identifier, Vector3 $position, ?\raspberry\world\World $world = null) : ?CustomEntity{
-        $definition = $this->packContentRegistry->getCustomEntityDefinition($identifier);
+        $definition = $this->pluginContentRegistry->getEntity($identifier);
         if($definition === null){
             return null;
         }
@@ -456,35 +393,69 @@ class Server{
     }
 
     public function registerPluginCustomItem(string $identifier, array $definition = []) : int{
-        if(!preg_match('/^[a-z0-9_.-]+:[a-z0-9_.-]+$/D', strtolower($identifier))){
+        if(!preg_match('/^[a-z0-9_.-]+:[a-z0-9_./-]+$/D', strtolower($identifier))){
             throw new \InvalidArgumentException("Custom item identifier must use namespace:name format");
         }
         $identifier = strtolower($identifier);
-        if(!isset($definition["minecraft:item"])){
-            $definition = ["minecraft:item" => ["description" => ["identifier" => $identifier], "components" => is_array($definition["components"] ?? null) ? $definition["components"] : []]];
+        if($this->pluginContentRegistry->hasItem($identifier)){
+            throw new \InvalidArgumentException("Custom item is already registered: {$identifier}");
         }
-        $this->packContentRegistry->registerCustomItem($identifier, $definition);
-        return $this->itemTypeDictionary->registerCustomItem($identifier, true, ItemRegistryPacket::VERSION_DATA_DRIVEN, $this->buildCustomItemComponentsNbt($identifier, $definition));
+        $components = is_array($definition["components"] ?? null) ? $definition["components"] : $definition;
+        $definition = ["minecraft:item" => ["description" => ["identifier" => $identifier], "components" => $components]];
+        $this->pluginContentRegistry->registerItem($identifier, $components);
+        $runtimeId = $this->itemTypeDictionary->registerCustomItem($identifier, true, ItemRegistryPacket::VERSION_DATA_DRIVEN, $this->buildCustomItemComponentsNbt($identifier, $definition));
+        $creativeGroup = null;
+        foreach($this->creativeContent->groups as $index => $group){
+            if(($group[1] ?? null) === "Plugin Items") { $creativeGroup = $index; break; }
+        }
+        if($creativeGroup === null){
+            $creativeGroup = count($this->creativeContent->groups);
+            $this->creativeContent->groups[] = [CreativeContentPacket::CATEGORY_ITEMS, "Plugin Items", \raspberry\network\mcpe\protocol\types\ItemStack::empty()];
+        }
+        $creativeItem = new Item($identifier, 1);
+        $this->creativeContent->items[] = [$this->itemTranslator->toNetwork($creativeItem), $creativeGroup];
+        $this->creativeItems[] = $creativeItem;
+        return $runtimeId;
+    }
+
+    public function registerPluginCustomEntity(string $identifier, array $definition = []) : void{
+        $this->pluginContentRegistry->registerEntity(strtolower($identifier), $definition);
     }
 
     public function registerPluginCustomBlock(string $identifier, string $fallbackBlock = "minecraft:stone") : void{
         $identifier = strtolower($identifier);
-        if(!preg_match('/^[a-z0-9_.-]+:[a-z0-9_.-]+$/D', $identifier)){
+        if(!preg_match('/^[a-z0-9_.-]+:[a-z0-9_./-]+$/D', $identifier)){
             throw new \InvalidArgumentException("Custom block identifier must use namespace:name format");
         }
+        $fallbackBlock = strtolower($fallbackBlock);
         if(!$this->blockStateRegistry->isRegistered($fallbackBlock)){
             throw new \InvalidArgumentException("Unknown fallback block: {$fallbackBlock}");
         }
-        $this->pluginCustomBlocks[$identifier] = $fallbackBlock;
+        $this->pluginContentRegistry->registerBlock($identifier, $fallbackBlock);
     }
 
     public function placePluginCustomBlock(\raspberry\world\World $world, int $x, int $y, int $z, string $identifier) : void{
-        $fallback = $this->pluginCustomBlocks[strtolower($identifier)] ?? throw new \InvalidArgumentException("Custom block is not registered: {$identifier}");
+        $fallback = $this->pluginContentRegistry->getBlockFallback($identifier) ?? throw new \InvalidArgumentException("Custom block is not registered: {$identifier}");
         $world->setBlock($x, $y, $z, $this->blockStateRegistry->getDefaultState($fallback));
+        $this->pluginCustomBlockLocations[$world->getName() . ":{$x}:{$y}:{$z}"] = strtolower($identifier);
     }
 
     public function getPluginCustomBlockFallback(string $identifier) : ?string{
-        return $this->pluginCustomBlocks[strtolower($identifier)] ?? null;
+        return $this->pluginContentRegistry->getBlockFallback($identifier);
+    }
+
+    public function getPluginCustomBlockIdAt(\raspberry\world\World $world, int $x, int $y, int $z) : ?string{
+        $stateName = $world->getBlock($x, $y, $z)->getName();
+        $locationKey = $world->getName() . ":{$x}:{$y}:{$z}";
+        $placedId = $this->pluginCustomBlockLocations[$locationKey] ?? null;
+        if($placedId !== null && $this->pluginContentRegistry->getBlockFallback($placedId) === $stateName){
+            return $placedId;
+        }
+        unset($this->pluginCustomBlockLocations[$locationKey]);
+        foreach($this->pluginContentRegistry->getBlocks() as $identifier => $fallback){
+            if($fallback === $stateName) return $identifier;
+        }
+        return null;
     }
 
     private function buildCustomItemComponentsNbt(string $identifier, array $definition) : string{
@@ -523,10 +494,6 @@ class Server{
         $nbt->writeString("name", $identifier);
         $nbt->endCompound();
         return $nbt->getBuffer();
-    }
-
-    public function getFunctionRunner() : FunctionRunner{
-        return $this->functionRunner;
     }
 
     public function getPermissionManager() : PermissionManager{
@@ -1063,8 +1030,6 @@ class Server{
             "give" => "op",
             "clear" => "op",
             "effect" => "op",
-            "function" => "op",
-            "behaviorpack" => "op",
             "save-all" => "op",
             "stop" => "op"
         ] as $command => $default){
@@ -1094,8 +1059,6 @@ class Server{
             new GiveCommand(),
             new ClearCommand(),
             new EffectCommand(),
-            new FunctionCommand(),
-            new BehaviorPackCommand(),
             new SaveAllCommand(),
             new StopCommand(),
             new VersionCommand()
@@ -1424,10 +1387,6 @@ class Server{
             $world->tick($this->currentTick);
         }
 
-        $this->functionRunner->tick();
-        if(isset($this->scriptRuntime)){
-            $this->scriptRuntime->tick();
-        }
 
         if($this->autoSaveTicks > 0 && $this->currentTick % $this->autoSaveTicks === 0){
             $this->saveWorlds(false);
@@ -1496,9 +1455,6 @@ class Server{
         $this->logger->info($this->language->translate("server.stopping"));
         if(isset($this->pluginManager)){
             $this->pluginManager->disablePlugins();
-        }
-        if(isset($this->scriptRuntime)){
-            $this->scriptRuntime->stopAll();
         }
         $this->logger->info($this->language->translate("server.saving"));
         $this->saveWorlds(true);

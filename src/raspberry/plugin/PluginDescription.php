@@ -9,7 +9,6 @@ use function file_get_contents;
 use function is_array;
 use function is_file;
 use function is_string;
-use function json_decode;
 use function trim;
 
 class PluginDescription{
@@ -37,14 +36,15 @@ class PluginDescription{
      * @throws PluginException
      */
     public function __construct(array $data){
+        if(is_array($data["plugin"] ?? null)) $data = array_merge($data, $data["plugin"]);
         $name = $data["name"] ?? null;
         $version = $data["version"] ?? "1.0.0";
         $main = $data["main"] ?? null;
         if(!is_string($name) || trim($name) === ""){
-            throw new PluginException("plugin.json: 'name' is required");
+            throw new PluginException("plugin.toml: 'name' is required");
         }
         if(!is_string($main) || trim($main) === ""){
-            throw new PluginException("plugin.json: 'main' class is required");
+            throw new PluginException("plugin.toml: 'main' class is required");
         }
         $this->name = trim($name);
         $this->version = is_string($version) ? $version : "1.0.0";
@@ -62,8 +62,8 @@ class PluginDescription{
         $this->depend = $this->stringList($data["depend"] ?? $data["depends"] ?? []);
         $this->softDepend = $this->stringList($data["softdepend"] ?? $data["soft-depend"] ?? []);
         $this->loadBefore = $this->stringList($data["loadbefore"] ?? $data["load-before"] ?? []);
-        $this->commands = is_array($data["commands"] ?? null) ? $data["commands"] : [];
-        $this->permissions = is_array($data["permissions"] ?? null) ? $data["permissions"] : [];
+        $this->commands = $this->namedEntries($data["commands"] ?? [], "name");
+        $this->permissions = $this->namedEntries($data["permissions"] ?? [], "name");
     }
 
     /**
@@ -74,11 +74,30 @@ class PluginDescription{
             throw new PluginException("plugin manifest not found: {$path}");
         }
         $contents = file_get_contents($path);
-        $data = $contents === false ? null : json_decode($contents, true);
+        $data = $contents === false ? null : TomlParser::parse($contents);
         if(!is_array($data)){
-            throw new PluginException("plugin manifest is not valid JSON: {$path}");
+            throw new PluginException("plugin manifest is not valid TOML: {$path}");
         }
         return new self($data);
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private function namedEntries(mixed $value, string $nameKey) : array{
+        if(!is_array($value)) return [];
+        $out = [];
+        if(array_is_list($value)){
+            foreach($value as $entry){
+                if(!is_array($entry) || !is_string($entry[$nameKey] ?? null) || trim($entry[$nameKey]) === "") continue;
+                $name = trim($entry[$nameKey]);
+                unset($entry[$nameKey]);
+                $out[$name] = $entry;
+            }
+            return $out;
+        }
+        foreach($value as $name => $entry){
+            if(is_string($name) && is_array($entry)) $out[$name] = $entry;
+        }
+        return $out;
     }
 
     /**

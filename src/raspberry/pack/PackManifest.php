@@ -31,11 +31,7 @@ final class PackManifest{
 
     private const MAX_SIZE = 262144;
 
-    public const TYPE_BEHAVIOR = "behavior";
     public const TYPE_RESOURCE = "resource";
-
-    /** module types that make a pack a behavior pack */
-    private const BEHAVIOR_MODULES = ["data", "script", "client_data"];
 
     /** module types that make a pack a resource pack */
     private const RESOURCE_MODULES = ["resources", "client_data"];
@@ -125,7 +121,7 @@ final class PackManifest{
             throw new PackException("expected a {$expectedType} pack, found {$packType} modules");
         }
         if($packType === null){
-            throw new PackException("not a behavior or resource pack (needs a \"data\", \"script\", \"resources\" or \"client_data\" module)");
+            throw new PackException("not a resource pack (needs a \"resources\" or \"client_data\" module)");
         }
 
         $dependencies = [];
@@ -169,10 +165,6 @@ final class PackManifest{
         return $this->packType;
     }
 
-    public function isBehaviorPack() : bool{
-        return $this->packType === self::TYPE_BEHAVIOR;
-    }
-
     public function isResourcePack() : bool{
         return $this->packType === self::TYPE_RESOURCE;
     }
@@ -210,34 +202,13 @@ final class PackManifest{
      * @param list<string> $moduleTypes
      */
     private static function detectType(array $moduleTypes) : ?string{
-        $isBehavior = false;
-        $isResource = false;
-        foreach($moduleTypes as $type){
-            if(in_array($type, self::BEHAVIOR_MODULES, true)){
-                $isBehavior = true;
-            }
-            if(in_array($type, self::RESOURCE_MODULES, true)){
-                $isResource = true;
-            }
-        }
-        // "resources" module is a clear resource pack; "data"/"script" without "resources" is behavior
         if(in_array("resources", $moduleTypes, true)){
             return self::TYPE_RESOURCE;
         }
-        if($isBehavior){
-            return self::TYPE_BEHAVIOR;
-        }
-        if($isResource){
+        if(in_array("client_data", $moduleTypes, true)){
             return self::TYPE_RESOURCE;
         }
         return null;
-    }
-
-    /**
-     * @param list<string> $moduleTypes
-     */
-    private static function isBehavior(array $moduleTypes) : bool{
-        return self::detectType($moduleTypes) === self::TYPE_BEHAVIOR;
     }
 
     private static function readUuid(mixed $value, string $field) : string{

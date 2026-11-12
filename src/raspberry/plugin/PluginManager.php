@@ -87,10 +87,9 @@ class PluginManager{
             if($entry === "." || $entry === "..") continue;
             $path = $this->pluginsPath . "/" . $entry;
             if(!is_dir($path)) continue;
-            if(!is_file($path . "/plugin.json") && !is_file($path . "/plugin.yml")) continue;
+            if(!is_file($path . "/plugin.toml")) continue;
             try{
-                $desc = is_file($path . "/plugin.json") ? PluginDescription::fromFile($path . "/plugin.json") : null;
-                if($desc === null) continue;
+                $desc = PluginDescription::fromFile($path . "/plugin.toml");
                 $candidates[$desc->getName()] = ["path" => $path, "desc" => $desc];
             }catch(Throwable $e){
                 $this->server->getLogger()->error("Failed to read plugin manifest in {$entry}: " . $e->getMessage());
@@ -293,7 +292,7 @@ class PluginManager{
 }
 
 /**
- * Command registered from plugin.json. Execution is delegated to the plugin via PluginCommandExecutor if implemented.
+ * Command registered from plugin.toml. Execution is delegated to the plugin via PluginCommandExecutor if implemented.
  */
 class PluginManifestCommand extends Command{
     public function __construct(

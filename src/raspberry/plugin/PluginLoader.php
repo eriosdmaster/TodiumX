@@ -37,13 +37,12 @@ class PluginLoader{
      */
     public function loadPlugin(string $path) : Plugin{
         $path = rtrim($path, "/\\");
-        $manifest = $path . "/plugin.json";
+        $manifest = $path . "/plugin.toml";
         if(!is_file($manifest)){
-            // also accept plugin.yml? only if yaml parser available and file exists - keep simple, json first
-            if(is_file($path . "/plugin.yml")){
-                throw new PluginException("plugin.yml found but only plugin.json is supported by this loader: {$path}");
+            if(is_file($path . "/plugin.json")){
+                throw new PluginException("plugin.json manifests are no longer supported; rename and convert it to plugin.toml: {$path}");
             }
-            throw new PluginException("plugin.json not found in {$path}");
+            throw new PluginException("plugin.toml not found in {$path}");
         }
         $description = PluginDescription::fromFile($manifest);
         $this->pluginPaths[$description->getName()] = $path;

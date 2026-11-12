@@ -1,10 +1,5 @@
-# Todium X
+# TodiumX
 
-A fork of Raspberry Pi that plans to add interesting systems and features, making gaming more engaging.
+Servidor Bedrock com suporte a plugins PHP e manifestos TOML.
 
-Credits to ByteForge88 
-
-
-# Updates:
-
-No updates yet.
+Veja [PLUGINS.md](PLUGINS.md) e `examples/ExamplePlugin/` para APIs de plugins, itens, blocos lógicos, entidades, comandos e eventos. Packs de recursos ficam em `resource_packs/`.

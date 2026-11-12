@@ -1,122 +1,80 @@
-# PHP Plugins (TodiumX)
+# Plugins PHP (TodiumX)
 
-## Plugin location
-Place folder plugins in your server data `plugins/` directory (same level as `behavior_packs/`, `worlds/`, etc.), for example:
+## Instalação
+
+Coloque cada plugin em `<data>/plugins/NomeDoPlugin/`. O arquivo obrigatório é `plugin.toml`; o código principal fica em `src/`. Um exemplo completo está em `examples/ExamplePlugin/`.
 
 ```text
-<data>/plugins/MyPlugin/plugin.json
-<data>/plugins/MyPlugin/src/...
+<data>/plugins/MeuPlugin/plugin.toml
+<data>/plugins/MeuPlugin/src/Fornecedor/MeuPlugin/Main.php
 ```
 
-An example template is included at `examples/ExamplePlugin/`.
+## Manifesto TOML
 
-## Manifest (`plugin.json`)
-```json
-{
-  "name": "MyPlugin",
-  "version": "1.0.0",
-  "main": "MyVendor\\MyPlugin\\Main",
-  "api": "1.0.0",
-  "description": "Optional description",
-  "author": "Author",
-  "authors": ["A", "B"],
-  "depend": ["OtherPlugin"],
-  "softdepend": ["OptionalPlugin"],
-  "commands": {
-    "mycmd": {
-      "description": "My command",
-      "usage": "/mycmd",
-      "permission": "myplugin.mycmd",
-      "aliases": ["mc"]
-    }
-  },
-  "permissions": {
-    "myplugin.mycmd": { "default": "true", "description": "Use /mycmd" }
-  }
-}
+```toml
+name = "MeuPlugin"
+version = "1.0.0"
+main = "Fornecedor\\MeuPlugin\\Main"
+api = "1.0.0"
+description = "Descrição opcional"
+authors = ["Autor A", "Autor B"]
+depend = []
+softdepend = ["PluginOpcional"]
+loadbefore = []
+
+[[commands]]
+name = "oi"
+description = "Responde ao comando"
+usage = "/oi"
+permission = "meuplugin.oi"
+aliases = ["ola"]
+
+[[permissions]]
+name = "meuplugin.oi"
+description = "Permite usar /oi"
+default = "true"
 ```
 
-- `main` must be a class implementing `raspberry\plugin\Plugin` (usually extends `PluginBase`).
-- Code is autoloaded from `src/` using PSR-4-style namespace-to-path mapping (e.g. `MyVendor\MyPlugin\Main` -> `src/MyVendor/MyPlugin/Main.php`).
+O leitor aceita strings básicas/literais, números, booleanos, arrays, tabelas e tabelas em array (`[[commands]]`). Manifestos `plugin.json` não são carregados. `main` implementa `raspberry\plugin\Plugin` (normalmente estendendo `PluginBase`). As classes seguem caminho PSR-4 a partir de `src/`.
 
-## Plugin base
-```php
-use raspberry\plugin\PluginBase;
+## APIs de plugins
 
-class Main extends PluginBase {
-    public function onLoad() : void {}
-    public function onEnable() : void {}
-    public function onDisable() : void {}
-}
-```
+`PluginBase` fornece `getServer()`, `getLogger()`, `getDataFolder()`, `getDescription()`, `registerEvents()` e helpers para mundo, itens, blocos e entidades. O registro de eventos usa `Listener` e `#[EventHandler]`; os eventos básicos são entrada, saída e chat. Comandos TOML chamam `PluginCommandExecutor::onCommand()`.
 
-Useful APIs: `$this->getServer()`, `$this->getLogger()`, `$this->getDataFolder()` (auto-created under `<data>/plugins/<Name>/`), `$this->getDescription()`.
-
-`PluginBase` also provides protected helpers for runtime content:
+Exemplo de registro em `onEnable()`:
 
 ```php
-public function onEnable() : void {
-    $this->registerCustomItem("myplugin:token", [
-        "minecraft:max_stack_size" => 16,
-        "minecraft:icon" => ["texture" => "myplugin.token"],
-        "minecraft:display_name" => ["value" => "Token"],
-    ]);
+$this->registerCustomItem("meuplugin:token", [
+    "minecraft:max_stack_size" => 16,
+    "minecraft:icon" => ["texture" => "meuplugin.token"],
+    "minecraft:display_name" => ["value" => "Token"],
+]);
+$item = $this->createCustomItem("meuplugin:token", 3);
 
-    // This registers a plugin identifier backed by a vanilla state. Client-side
-    // custom block palette and texture registration are not implemented yet.
-    $this->registerCustomBlock("myplugin:marble", "minecraft:quartz_block");
-    $this->placeCustomBlock($this->getServer()->getWorldManager()->getDefaultWorld(), 0, 70, 0, "myplugin:marble");
+$this->registerCustomBlock("meuplugin:marble", "minecraft:quartz_block");
+$this->placeCustomBlock($world, 0, 70, 0, "meuplugin:marble");
+$id = $this->getCustomBlockIdAt($world, 0, 70, 0);
 
-    // Spawn any custom entity loaded from an active behavior pack.
-    $this->spawnCustomEntity("example:mob", 2.5, 70, 0.5);
-}
+$this->registerCustomEntity("meuplugin:scout", [
+    "name" => "Scout", "max_health" => 20, "speed" => 0.1,
+    "follow_range" => 16, "follow_players" => true, "wander" => true,
+    "width" => 0.7, "height" => 1.8,
+]);
+$entity = $this->spawnCustomEntity("meuplugin:scout", 0.5, 70, 0.5, $world);
 ```
 
-Custom items are added to the server item registry and can be given by identifier. Custom block helpers currently map identifiers to vanilla fallback states; they do not register a new Bedrock block palette entry. `spawnCustomEntity()` instantiates active pack definitions, sends the actor to clients, and ticks the supported movement behaviors (`random_stroll`, follow/target behaviors) on the server.
+Itens registrados entram no dicionário de itens e na lista Criativa `Plugin Items`; o ícone usa a textura nomeada no resource pack ativo. Blocos customizados são IDs lógicos associados a um estado vanilla de fallback: a paleta atual do servidor ainda não registra um novo estado Bedrock, então aparência e colisão são as do fallback. `getCustomBlockIdAt()` recupera o ID lógico quando o estado vanilla corresponde a um fallback registrado.
 
-## Events
-Implement `raspberry\event\Listener` and register handlers:
-```php
-use raspberry\event\EventHandler;
-use raspberry\event\Listener;
-use raspberry\event\player\PlayerJoinEvent;
+Entidades são spawnadas e movimentadas pelo servidor. O resource pack do cliente precisa fornecer a definição visual associada ao mesmo identificador para mostrar um modelo customizado; sem ela, o cliente pode mostrar uma representação ausente. As opções aceitas são `name`, `max_health` (ou `health`), `speed`, `follow_range`, `follow_players`, `wander`, `width` e `height`.
 
-class Main extends PluginBase implements Listener {
-    public function onEnable() : void {
-        $this->getServer()->getPluginManager()->registerEvents($this, $this);
-    }
+## Resource packs
 
-    #[EventHandler]
-    public function onJoin(PlayerJoinEvent $event) : void {
-        $event->getPlayer()->sendMessage("Welcome!");
-    }
-}
-```
+Resource packs continuam em `<data>/resource_packs/`; o servidor valida o manifesto, compacta os arquivos e negocia/download em chunks com clientes. Inclua nele os ícones e definições visuais para conteúdo customizado.
 
-Built-in events currently wired: `PlayerJoinEvent`, `PlayerQuitEvent`, `PlayerChatEvent` (cancellable). The event system supports custom `raspberry\event\Event` subclasses.
+## Compilação nativa
 
-## Commands
-Declare commands in `plugin.json`. To handle them, implement `raspberry\plugin\PluginCommandExecutor`:
-```php
-use raspberry\plugin\PluginCommandExecutor;
-use raspberry\command\Command;
-use raspberry\command\CommandSender;
-
-class Main extends PluginBase implements PluginCommandExecutor {
-    public function onCommand(CommandSender $sender, Command $command, string $label, array $args) : bool {
-        // handle and return true
-        return true;
-    }
-}
-```
-
-## Permissions
-Declare permissions in `plugin.json`; they are registered on load via the server permission manager.
-
-## Native (Rust) builds for Linux and macOS
-The native library is built with Rust/Cargo:
-```bash
+```sh
 php build/make-native.php
-# optional: php build/make-native.php --target x86_64-apple-darwin
 ```
-Supported outputs: `libraspberry_native.so` (Linux), `libraspberry_native.dylib` (macOS), `raspberry_native.dll` (Windows). The PHP FFI loader selects the correct filename per OS.
+
+A biblioteca nativa selecionada depende do sistema operacional.
