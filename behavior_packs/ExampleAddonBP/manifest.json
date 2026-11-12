@@ -1,0 +1,18 @@
+{
+    "format_version": 2,
+    "header": {
+        "description": "Exemplo de behavior pack do TodiumX: item, bloco, receitas, funcao e entidade customizadas.",
+        "name": "Example Add-On (Behavior)",
+        "uuid": "4b8f1c2d-9a3e-4d7a-b1c6-2f5e8d0a9b31",
+        "version": [1, 0, 0],
+        "min_engine_version": [1, 20, 0]
+    },
+    "modules": [
+        {
+            "description": "Conteudo de dados do Example Add-On",
+            "type": "data",
+            "uuid": "c7a2e5f8-3b6d-4c91-a0d4-8e2b7f5c3a90",
+            "version": [1, 0, 0]
+        }
+    ]
+}

@@ -55,6 +55,9 @@ class CraftingManager{
 
     private int $nextNetworkId = 1;
 
+    /** @var array<string, true> ids of pack recipes that do not go into recipesById (furnace/smithing) */
+    private array $packRecipeIds = [];
+
     public function __construct(?string $path = null){
         $path ??= dirname(__DIR__, 3) . "/resources/vanilla/recipes.json";
         $contents = @file_get_contents($path);
@@ -274,6 +277,71 @@ class CraftingManager{
         foreach($unlock->getItems() as $ingredient){
             foreach($ingredient->getItemIds() as $id){
                 $this->unlockedByItem[$id][] = $recipe;
+            }
+        }
+    }
+
+    /**
+     * Registers a recipe coming from a behavior pack or plugin. Returns false when the
+     * recipe id is already taken (the first definition in the pack stack wins).
+     *
+     * @param list<?RecipeIngredient> $input cells row-major, null for empty cells
+     * @param list<Item> $output
+     */
+    public function registerPackShaped(string $id, string $block, int $priority, int $width, int $height, array $input, array $output, ?RecipeUnlock $unlock) : bool{
+        if(isset($this->recipesById[$id]) || isset($this->packRecipeIds[$id])){
+            return false;
+        }
+        $recipe = new ShapedRecipe($id, $block, $priority, $width, $height, $input, $output, $unlock, $this->nextNetworkId++);
+        $this->addCraftingRecipe($recipe);
+        $this->packRecipeIds[$id] = true;
+        return true;
+    }
+
+    /**
+     * @param list<RecipeIngredient> $input
+     * @param list<Item> $output
+     */
+    public function registerPackShapeless(string $id, string $block, int $priority, array $input, array $output, ?RecipeUnlock $unlock) : bool{
+        if(isset($this->recipesById[$id]) || isset($this->packRecipeIds[$id])){
+            return false;
+        }
+        $recipe = new ShapelessRecipe($id, $block, $priority, $input, $output, $unlock, $this->nextNetworkId++);
+        $this->addCraftingRecipe($recipe);
+        $this->packRecipeIds[$id] = true;
+        return true;
+    }
+
+    public function registerPackFurnace(string $id, array $blocks, int $priority, RecipeIngredient $input, Item $output) : bool{
+        if(isset($this->recipesById[$id]) || isset($this->packRecipeIds[$id])){
+            return false;
+        }
+        $this->furnaceRecipes[] = new FurnaceRecipe($id, $blocks, $priority, $input, $output);
+        $this->packRecipeIds[$id] = true;
+        return true;
+    }
+
+    public function registerPackSmithing(string $id, RecipeIngredient $template, RecipeIngredient $base, RecipeIngredient $addition, ?Item $output) : bool{
+        if(isset($this->recipesById[$id]) || isset($this->packRecipeIds[$id])){
+            return false;
+        }
+        $recipe = new SmithingRecipe($id, $template, $base, $addition, $output, $this->nextNetworkId++);
+        $this->smithingRecipes[$recipe->getNetworkId()] = $recipe;
+        $this->packRecipeIds[$id] = true;
+        return true;
+    }
+
+    /**
+     * Adds a custom item tag from a behavior pack (or plugin), so pack recipes can
+     * use it as an ingredient. Existing members are kept.
+     *
+     * @param list<string> $itemIds
+     */
+    public function addItemTag(string $tag, array $itemIds) : void{
+        $this->itemTags[$tag] ??= [];
+        foreach($itemIds as $itemId){
+            if(!in_array($itemId, $this->itemTags[$tag], true)){
+                $this->itemTags[$tag][] = $itemId;
             }
         }
     }

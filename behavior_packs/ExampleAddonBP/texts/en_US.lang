@@ -1,0 +1,5 @@
+pack.name=Example Add-On (Behavior)
+pack.description=Exemplo de behavior pack do TodiumX: item, bloco, receitas, funcao e entidade customizadas.
+item.todium:ruby.name=Ruby
+item.todium:ruby_block.name=Bloco de Ruby
+entity.todium:ruby_golem.name=Ruby Golem

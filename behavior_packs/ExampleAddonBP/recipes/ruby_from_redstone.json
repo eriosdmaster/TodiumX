@@ -1,0 +1,14 @@
+{
+    "format_version": "1.20.10",
+    "minecraft:recipe_furnace": {
+        "description": {
+            "identifier": "todium:ruby_from_redstone"
+        },
+        "tags": ["furnace", "blast_furnace"],
+        "input": "minecraft:redstone",
+        "output": {
+            "item": "todium:ruby",
+            "count": 1
+        }
+    }
+}

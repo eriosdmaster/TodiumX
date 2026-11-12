@@ -114,11 +114,15 @@ use raspberry\command\defaults\VersionCommand;
 use raspberry\command\defaults\ClearCommand;
 use raspberry\command\defaults\EffectCommand;
 use raspberry\command\defaults\GiveCommand;
+use raspberry\command\defaults\BehaviorPackCommand;
+use raspberry\command\defaults\FunctionCommand;
 
 use raspberry\console\ConsoleReader;
 
 use raspberry\permission\OperatorList;
 use raspberry\pack\ResourcePackManager;
+use raspberry\pack\BehaviorPackManager;
+use raspberry\pack\FunctionRunner;
 use raspberry\permission\PermissionManager;
 use raspberry\plugin\PluginManager;
 use raspberry\plugin\PluginContentRegistry;
@@ -282,6 +286,8 @@ class Server{
     private ConsoleCommandSender $consoleSender;
 
     private ResourcePackManager $resourcePackManager;
+    private BehaviorPackManager $behaviorPackManager;
+    private FunctionRunner $functionRunner;
     private PluginContentRegistry $pluginContentRegistry;
     private PluginManager $pluginManager;
     /** @var array<string, string> world and coordinates => logical plugin block ID */
@@ -334,8 +340,24 @@ class Server{
 
         $this->itemTypeDictionary = new ItemTypeDictionary();
         $this->itemTranslator = new ItemTranslator($this->itemTypeDictionary, $this->blockStateRegistry, $this->blockTranslator);
-        $this->creativeContent = $this->itemTranslator->buildCreativeContent(new CreativeInventory(), $this->creativeItems);
         $this->craftingManager = new CraftingManager();
+        $this->creativeContent = $this->itemTranslator->buildCreativeContent(new CreativeInventory(), $this->creativeItems);
+
+        //behavior packs apply their content (items, blocks, entities, recipes, functions)
+        //before the crafting data packet is built from the registries; items join the
+        //creative content above, recipes join the crafting data built below
+        $this->pluginContentRegistry = new PluginContentRegistry();
+        $this->behaviorPackManager = new BehaviorPackManager(
+            Path::join($this->dataPath, "behavior_packs"),
+            Path::join($this->dataPath, "behavior_packs.json"),
+            $this->language,
+            $this->logger,
+            Path::join($this->dataPath, "worlds")
+        );
+        $this->behaviorPackManager->load();
+        $this->functionRunner = new FunctionRunner($this->language, $this->logger);
+        $this->behaviorPackManager->applyContent($this);
+
         $this->craftingData = $this->itemTranslator->buildCraftingData($this->craftingManager);
 
         $this->worldManager = new WorldManager(
@@ -362,7 +384,6 @@ class Server{
             $this->logger
         );
         $this->resourcePackManager->load();
-        $this->pluginContentRegistry = new PluginContentRegistry();
 
         $this->registerCommands();
 
@@ -373,6 +394,14 @@ class Server{
 
     public function getResourcePackManager() : ResourcePackManager{
         return $this->resourcePackManager;
+    }
+
+    public function getBehaviorPackManager() : BehaviorPackManager{
+        return $this->behaviorPackManager;
+    }
+
+    public function getFunctionRunner() : FunctionRunner{
+        return $this->functionRunner;
     }
 
     public function getPluginContentRegistry() : PluginContentRegistry{
@@ -392,8 +421,8 @@ class Server{
         return new CustomEntity($world, $position, $identifier, $definition);
     }
 
-    public function registerPluginCustomItem(string $identifier, array $definition = []) : int{
-        if(!preg_match('/^[a-z0-9_.-]+:[a-z0-9_./-]+$/D', strtolower($identifier))){
+    public function registerPluginCustomItem(string $identifier, array $definition = [], string $creativeGroup = "Plugin Items") : int{
+        if(!preg_match('/^[a-z0-9_.\-]+:[a-z0-9_.\/\-]+$/D', strtolower($identifier))){
             throw new \InvalidArgumentException("Custom item identifier must use namespace:name format");
         }
         $identifier = strtolower($identifier);
@@ -404,16 +433,16 @@ class Server{
         $definition = ["minecraft:item" => ["description" => ["identifier" => $identifier], "components" => $components]];
         $this->pluginContentRegistry->registerItem($identifier, $components);
         $runtimeId = $this->itemTypeDictionary->registerCustomItem($identifier, true, ItemRegistryPacket::VERSION_DATA_DRIVEN, $this->buildCustomItemComponentsNbt($identifier, $definition));
-        $creativeGroup = null;
+        $creativeGroupIndex = null;
         foreach($this->creativeContent->groups as $index => $group){
-            if(($group[1] ?? null) === "Plugin Items") { $creativeGroup = $index; break; }
+            if(($group[1] ?? null) === $creativeGroup) { $creativeGroupIndex = $index; break; }
         }
-        if($creativeGroup === null){
-            $creativeGroup = count($this->creativeContent->groups);
-            $this->creativeContent->groups[] = [CreativeContentPacket::CATEGORY_ITEMS, "Plugin Items", \raspberry\network\mcpe\protocol\types\ItemStack::empty()];
+        if($creativeGroupIndex === null){
+            $creativeGroupIndex = count($this->creativeContent->groups);
+            $this->creativeContent->groups[] = [CreativeContentPacket::CATEGORY_ITEMS, $creativeGroup, \raspberry\network\mcpe\protocol\types\ItemStack::empty()];
         }
         $creativeItem = new Item($identifier, 1);
-        $this->creativeContent->items[] = [$this->itemTranslator->toNetwork($creativeItem), $creativeGroup];
+        $this->creativeContent->items[] = [$this->itemTranslator->toNetwork($creativeItem), $creativeGroupIndex];
         $this->creativeItems[] = $creativeItem;
         return $runtimeId;
     }
@@ -424,7 +453,7 @@ class Server{
 
     public function registerPluginCustomBlock(string $identifier, string $fallbackBlock = "minecraft:stone") : void{
         $identifier = strtolower($identifier);
-        if(!preg_match('/^[a-z0-9_.-]+:[a-z0-9_./-]+$/D', $identifier)){
+        if(!preg_match('/^[a-z0-9_.\-]+:[a-z0-9_.\/\-]+$/D', $identifier)){
             throw new \InvalidArgumentException("Custom block identifier must use namespace:name format");
         }
         $fallbackBlock = strtolower($fallbackBlock);
@@ -1030,6 +1059,8 @@ class Server{
             "give" => "op",
             "clear" => "op",
             "effect" => "op",
+            "behaviorpack" => "op",
+            "function" => "op",
             "save-all" => "op",
             "stop" => "op"
         ] as $command => $default){
@@ -1059,6 +1090,8 @@ class Server{
             new GiveCommand(),
             new ClearCommand(),
             new EffectCommand(),
+            new BehaviorPackCommand(),
+            new FunctionCommand(),
             new SaveAllCommand(),
             new StopCommand(),
             new VersionCommand()

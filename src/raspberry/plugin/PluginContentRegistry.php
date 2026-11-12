@@ -44,7 +44,7 @@ final class PluginContentRegistry{
     public function getItems() : array{ return $this->items; }
 
     private static function validateId(string $id) : void{
-        if(preg_match('/^[a-z0-9_.-]+:[a-z0-9_./-]+$/D', strtolower($id)) !== 1){
+        if(preg_match('/^[a-z0-9_.\-]+:[a-z0-9_.\/\-]+$/D', strtolower($id)) !== 1){
             throw new InvalidArgumentException("Custom identifier must use namespace:name format: {$id}");
         }
     }
