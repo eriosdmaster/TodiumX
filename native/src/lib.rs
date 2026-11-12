@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use chunk::{Chunk, Storage, SubChunk, MAX_LAYERS, SIZE, SUBCHUNKS};
 
 /// Bumped whenever a function below changes, PHP refuses a library it does not know.
-pub const ABI_VERSION: u32 = 4;
+pub const ABI_VERSION: u32 = 5;
 
 struct Entry {
     chunk: Chunk,
@@ -73,6 +73,96 @@ unsafe fn slice<'a>(data: *const u8, length: usize) -> &'a [u8] {
 #[no_mangle]
 pub extern "C" fn rx_version() -> u32 {
     ABI_VERSION
+}
+
+mod profiler;
+
+/// Reads a scope name PHP passed in, `None` when the pointer is null or not valid UTF-8.
+fn profiler_scope_name(name: *const core::ffi::c_char) -> Option<String> {
+    if name.is_null() {
+        return None;
+    }
+
+    unsafe { core::ffi::CStr::from_ptr(name) }.to_str().ok().map(str::to_owned)
+}
+
+/// Hands the bytes of a JSON answer to PHP. `rx_free` takes them back together with the length.
+fn profiler_bytes(mut data: Vec<u8>) -> (*mut core::ffi::c_char, usize) {
+    data.shrink_to_fit();
+    let length = data.len();
+    let pointer = data.as_mut_ptr() as *mut core::ffi::c_char;
+    core::mem::forget(data);
+
+    (pointer, length)
+}
+
+/// Copies a JSON answer into `out`/`out_length`. 0 when PHP gave no place to put it.
+fn profiler_send(out: *mut *mut core::ffi::c_char, out_length: *mut usize, data: Vec<u8>) -> i32 {
+    if out.is_null() || out_length.is_null() {
+        return 0;
+    }
+
+    let (pointer, length) = profiler_bytes(data);
+    unsafe {
+        *out = pointer;
+        *out_length = length;
+    }
+
+    1
+}
+
+#[no_mangle]
+pub extern "C" fn rx_profiler_begin(name: *const core::ffi::c_char) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(name) = profiler_scope_name(name) {
+            profiler::begin(&name);
+        }
+    }));
+}
+
+#[no_mangle]
+pub extern "C" fn rx_profiler_end(name: *const core::ffi::c_char) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if let Some(name) = profiler_scope_name(name) {
+            profiler::end(&name);
+        }
+    }));
+}
+
+#[no_mangle]
+pub extern "C" fn rx_profiler_frame() {
+    let _ = std::panic::catch_unwind(|| profiler::frame());
+}
+
+#[no_mangle]
+pub extern "C" fn rx_profiler_reset() {
+    let _ = std::panic::catch_unwind(|| profiler::reset());
+}
+
+#[no_mangle]
+pub extern "C" fn rx_profiler_report(out: *mut *mut core::ffi::c_char, out_length: *mut usize) -> i32 {
+    let report = std::panic::catch_unwind(|| profiler::report().into_bytes());
+    match report {
+        Ok(data) => profiler_send(out, out_length, data),
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rx_pool_stats(out: *mut *mut core::ffi::c_char, out_length: *mut usize) -> i32 {
+    let stats = std::panic::catch_unwind(|| {
+        let stats = pool::stats();
+        format!(
+            "{{\"queued\":{},\"executed\":{},\"workers\":{}}}",
+            stats.queued, stats.executed, stats.workers
+        )
+        .into_bytes()
+    });
+
+    match stats {
+        Ok(data) => profiler_send(out, out_length, data),
+        Err(_) => 0,
+    }
 }
 
 /// Frees a buffer this library handed over.

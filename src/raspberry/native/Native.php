@@ -13,6 +13,7 @@ use Throwable;
 
 use function count;
 use function extension_loaded;
+use function is_array;
 use function is_file;
 
 use const PHP_OS_FAMILY;
@@ -20,7 +21,7 @@ use const PHP_OS_FAMILY;
 class Native{
 
     /** the library has to speak this version of the functions below */
-    public const ABI_VERSION = 4;
+    public const ABI_VERSION = 5;
 
     private const HEADER = <<<'C'
         uint32_t rx_version(void);
@@ -61,6 +62,13 @@ class Native{
         int32_t rx_bridge_submit_response(uint64_t handle, uint64_t request_id, const char* result_json, const char* error_json);
         int32_t rx_bridge_poll_log(uint64_t handle, char** out, size_t* out_len);
         void rx_bridge_free(uint64_t handle);
+
+        void rx_profiler_begin(const char* scope);
+        void rx_profiler_end(const char* scope);
+        void rx_profiler_frame(void);
+        int32_t rx_profiler_report(char** out, size_t* out_length);
+        void rx_profiler_reset(void);
+        int32_t rx_pool_stats(char** out, size_t* out_length);
         C;
 
     private static ?FFI $ffi = null;
@@ -298,6 +306,103 @@ class Native{
             self::$ffi->rx_bridge_free($handle);
         }catch(Throwable){
             // ignore
+        }
+    }
+
+    /**
+     * Starts a named profiling scope in the native profiler. A no-op without the library.
+     */
+    public static function profilerBegin(string $scope) : void{
+        if(self::$ffi === null) return;
+        try{
+            self::$ffi->rx_profiler_begin($scope);
+        }catch(Throwable){
+            // ignore
+        }
+    }
+
+    /**
+     * Stops a named profiling scope. A no-op without the library.
+     */
+    public static function profilerEnd(string $scope) : void{
+        if(self::$ffi === null) return;
+        try{
+            self::$ffi->rx_profiler_end($scope);
+        }catch(Throwable){
+            // ignore
+        }
+    }
+
+    /**
+     * Marks a frame boundary, the native side times the gap between frames. A no-op without the library.
+     */
+    public static function profilerFrame() : void{
+        if(self::$ffi === null) return;
+        try{
+            self::$ffi->rx_profiler_frame();
+        }catch(Throwable){
+            // ignore
+        }
+    }
+
+    /**
+     * Forgets every native sample. A no-op without the library.
+     */
+    public static function profilerReset() : void{
+        if(self::$ffi === null) return;
+        try{
+            self::$ffi->rx_profiler_reset();
+        }catch(Throwable){
+            // ignore
+        }
+    }
+
+    /**
+     * The native performance report as a JSON string, or null without the library.
+     */
+    public static function profilerReport() : ?string{
+        if(self::$ffi === null) return null;
+        try{
+            $ffi = self::$ffi;
+            $out = $ffi->new("char*");
+            $len = $ffi->new("size_t");
+            $has = $ffi->rx_profiler_report(FFI::addr($out), FFI::addr($len));
+            if($has !== 1) return null;
+            return self::take($out, (int)$len->cdata);
+        }catch(Throwable){
+            return null;
+        }
+    }
+
+    /**
+     * The worker pool depth and counters, or null without the library.
+     *
+     * @return array{queued: int, executed: int, workers: int}|null
+     */
+    public static function poolStats() : ?array{
+        if(self::$ffi === null) return null;
+        try{
+            $ffi = self::$ffi;
+            $out = $ffi->new("char*");
+            $len = $ffi->new("size_t");
+            $has = $ffi->rx_pool_stats(FFI::addr($out), FFI::addr($len));
+            if($has !== 1) return null;
+            $stats = json_decode(self::take($out, (int)$len->cdata), true);
+            return is_array($stats) ? $stats : null;
+        }catch(Throwable){
+            return null;
+        }
+    }
+
+    /**
+     * Times $callback as a native scope and returns what it returns, also when it throws.
+     */
+    public static function profilerScope(string $scope, Closure $callback) : mixed{
+        self::profilerBegin($scope);
+        try{
+            return $callback();
+        }finally{
+            self::profilerEnd($scope);
         }
     }
 }
