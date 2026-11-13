@@ -34,6 +34,7 @@ Este documento resume o que foi mapeado na engenharia reversa do binário oficia
 | `entities/*.json` | Registra a entidade (`is_summonable: true`): vida, movimento, follow range, collision box e comportamentos básicos viram uma `CustomEntity` spawnável por plugins |
 | `recipes/*.json` | `recipe_shaped`, `recipe_shapeless`, `recipe_furnace` e `recipe_smithing_*` entram no CraftingManager e no CraftingDataPacket; ingredientes aceitam `item`, `tag`, `count` e `data` |
 | `functions/*.mcfunction` | Registrados pelo caminho relativo e executados com `/function`; comentários `#` são ignorados |
+| `scripts/*.js` (módulo `script`) | **Script API**: JavaScript real via host nativo QuickJS (rquickjs 0.9) — veja [SCRIPT_API.md](SCRIPT_API.md); o pack `ExampleScriptAPIBP/` demonstra |
 | `loot_tables/`, `trade_tables/`, `spawn_rules/`, `features/`, `feature_rules/` | Validados, indexados e expostos por getters (`getLootTables()` etc.) para plugins usarem |
 | `texts/` | Ignorado pelo servidor (usado pelo cliente) |
 
@@ -56,9 +57,11 @@ Regras do stack (iguais às do servidor oficial):
 - `src/raspberry/pack/PackContentParser.php` — JSON dos packs -> objetos do servidor
 - `src/raspberry/pack/FunctionRunner.php` — execução de `.mcfunction`
 - `src/raspberry/pack/PackManifest.php` — manifest (agora também módulos `data`/`script`, capabilities, versões)
+- `src/raspberry/pack/script/` — **Script API** (`ScriptManager`, `NativeScriptHost`, `ScriptCommandSender`, `ServerScriptBridge`); host em `native/src/tosapi_shim.js` + `native/src/script.rs` (rquickjs 0.9)
 - `src/raspberry/crafting/CraftingManager.php` — novos métodos `registerPack*` e `addItemTag`
-- `src/raspberry/command/defaults/BehaviorPackCommand.php` e `FunctionCommand.php` — comandos (já existiam no projeto; agora registrados)
+- `src/raspberry/command/defaults/BehaviorPackCommand.php`, `FunctionCommand.php`, `ScriptApiCommand.php` e `ScriptEventCommand.php` — comandos
 - `tools/test_behavior_packs.php` — suíte de testes (`php tools/test_behavior_packs.php`)
+- `tools/test_script_api.php` — suíte de testes da Script API (`php tools/test_script_api.php`)
 
 ## O que a engenharia reversa encontrou no binário oficial
 

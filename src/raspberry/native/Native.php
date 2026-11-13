@@ -21,7 +21,7 @@ use const PHP_OS_FAMILY;
 class Native{
 
     /** the library has to speak this version of the functions below */
-    public const ABI_VERSION = 5;
+    public const ABI_VERSION = 6;
 
     private const HEADER = <<<'C'
         uint32_t rx_version(void);
@@ -51,10 +51,14 @@ class Native{
         uint64_t rx_pre_normal_chunk(uint64_t generator, int32_t chunk_x, int32_t chunk_z);
         uint64_t rx_pre_normal_spawn(uint64_t generator);
 
-        uint64_t rx_script_new(const char* pack_name, const char* shim_js);
-        int32_t rx_script_eval(uint64_t handle, const char* code);
-        int32_t rx_script_poll_log(uint64_t handle, char** out, size_t* out_len);
-        void rx_script_free(uint64_t handle);
+        uint64_t rx_api_host_new(const char* data_dir);
+        int32_t rx_api_host_load(uint64_t handle, const char* packs_json);
+        int32_t rx_api_host_tick(uint64_t handle, int64_t tick, const char* players_json);
+        int32_t rx_api_host_emit(uint64_t handle, const char* event, int64_t request_id, const char* data_json, char** out, size_t* out_len);
+        int32_t rx_api_host_eval(uint64_t handle, const char* code, char** out, size_t* out_len);
+        int32_t rx_api_host_command_result(uint64_t handle, int64_t request_id, int32_t ok, const char* output);
+        int32_t rx_api_host_drain(uint64_t handle, char** out, size_t* out_len);
+        void rx_api_host_free(uint64_t handle);
 
         uint64_t rx_bridge_new(const char* pack_name, const char* shim_js);
         int32_t rx_bridge_eval(uint64_t handle, const char* code);
@@ -212,42 +216,109 @@ class Native{
         return $data;
     }
 
-    public static function scriptNew(string $packName, string $shimJs) : int{
+    /**
+     * Creates the embedded QuickJS runtime for behavior pack scripts (rquickjs 0.9).
+     * Returns the handle (>0) or 0 when the library is unavailable.
+     */
+    public static function apiHostNew(string $dataDir) : int{
         if(self::$ffi === null) return 0;
         try{
-            return (int) self::$ffi->rx_script_new($packName, $shimJs);
+            return (int) self::$ffi->rx_api_host_new($dataDir);
         }catch(Throwable){
             return 0;
         }
     }
 
-    public static function scriptEval(int $handle, string $code) : bool{
+    /**
+     * Loads pack script sources: [{"id","name","entry","files":{rel:source}}].
+     */
+    public static function apiHostLoad(int $handle, string $packsJson) : bool{
         if(self::$ffi === null || $handle <= 0) return false;
         try{
-            return self::$ffi->rx_script_eval($handle, $code) === 1;
+            return self::$ffi->rx_api_host_load($handle, $packsJson) === 1;
         }catch(Throwable){
             return false;
         }
     }
 
-    public static function scriptPollLog(int $handle) : ?string{
+    public static function apiHostTick(int $handle, int $tick, string $playersJson) : bool{
+        if(self::$ffi === null || $handle <= 0) return false;
+        try{
+            return self::$ffi->rx_api_host_tick($handle, $tick, $playersJson) === 1;
+        }catch(Throwable){
+            return false;
+        }
+    }
+
+    /**
+     * Synchronous event delivery; returns the decoded JSON response (e.g. {"cancelled":true})
+     * or null when there is none / the host is gone.
+     */
+    public static function apiHostEmit(int $handle, string $event, int $requestId, string $dataJson) : ?array{
         if(self::$ffi === null || $handle <= 0) return null;
         try{
             $ffi = self::$ffi;
             $out = $ffi->new("char*");
             $len = $ffi->new("size_t");
-            $has = $ffi->rx_script_poll_log($handle, FFI::addr($out), FFI::addr($len));
+            $has = $ffi->rx_api_host_emit($handle, $event, $requestId, $dataJson, FFI::addr($out), FFI::addr($len));
             if($has !== 1) return null;
-            return self::take($out, (int)$len->cdata);
+            $raw = self::take($out, (int) $len->cdata);
+            $decoded = json_decode($raw, true);
+            return is_array($decoded) ? $decoded : null;
         }catch(Throwable){
             return null;
         }
     }
 
-    public static function scriptFree(int $handle) : void{
+    /**
+     * Evaluates JS (/scriptapi eval); returns {"ok":bool,"result":string} or null.
+     */
+    public static function apiHostEval(int $handle, string $code) : ?array{
+        if(self::$ffi === null || $handle <= 0) return null;
+        try{
+            $ffi = self::$ffi;
+            $out = $ffi->new("char*");
+            $len = $ffi->new("size_t");
+            $has = $ffi->rx_api_host_eval($handle, $code, FFI::addr($out), FFI::addr($len));
+            if($has !== 1) return null;
+            $raw = self::take($out, (int) $len->cdata);
+            $decoded = json_decode($raw, true);
+            return is_array($decoded) ? $decoded : null;
+        }catch(Throwable){
+            return null;
+        }
+    }
+
+    public static function apiHostCommandResult(int $handle, int $requestId, bool $ok, string $output) : bool{
+        if(self::$ffi === null || $handle <= 0) return false;
+        try{
+            return self::$ffi->rx_api_host_command_result($handle, $requestId, $ok ? 1 : 0, $output) === 1;
+        }catch(Throwable){
+            return false;
+        }
+    }
+
+    /**
+     * Drains the queued ops as one NDJSON blob, or null when nothing is pending.
+     */
+    public static function apiHostDrain(int $handle) : ?string{
+        if(self::$ffi === null || $handle <= 0) return null;
+        try{
+            $ffi = self::$ffi;
+            $out = $ffi->new("char*");
+            $len = $ffi->new("size_t");
+            $has = $ffi->rx_api_host_drain($handle, FFI::addr($out), FFI::addr($len));
+            if($has !== 1) return null;
+            return self::take($out, (int) $len->cdata);
+        }catch(Throwable){
+            return null;
+        }
+    }
+
+    public static function apiHostFree(int $handle) : void{
         if(self::$ffi === null || $handle <= 0) return;
         try{
-            self::$ffi->rx_script_free($handle);
+            self::$ffi->rx_api_host_free($handle);
         }catch(Throwable){
             // ignore
         }

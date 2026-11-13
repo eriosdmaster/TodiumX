@@ -323,6 +323,51 @@ final class BehaviorPack{
     }
 
     /**
+     * Lists the pack files under a relative prefix ("scripts/" for the Script API),
+     * for folder and archive packs alike. Paths are relative to the pack root with
+     * forward slashes, sorted.
+     *
+     * @return list<string>
+     */
+    public function listPackFiles(string $prefix) : array{
+        $prefix = strtolower($prefix);
+        $files = [];
+
+        if($this->archivePath !== null){
+            $root = $this->archiveRoot ?? "";
+            foreach(self::listArchive($this->archivePath) as $name){
+                $relative = $root === "" ? $name : (str_starts_with(strtolower($name), strtolower($root)) ? substr($name, strlen($root)) : null);
+                if($relative === null || $relative === ""){
+                    continue;
+                }
+                if($prefix === "" || str_starts_with(strtolower($relative), $prefix)){
+                    $files[] = $relative;
+                }
+            }
+        }else{
+            if(!is_dir($this->path)){
+                return [];
+            }
+            $prefixFull = $this->path . ($prefix === "" ? "" : "/" . rtrim($prefix, "/"));
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($prefixFull, FilesystemIterator::SKIP_DOTS | FilesystemIterator::CURRENT_AS_PATHNAME)
+            );
+            foreach($iterator as $pathname){
+                if(!is_string($pathname) || is_dir($pathname)){
+                    continue;
+                }
+                $relative = str_replace("\\", "/", substr($pathname, strlen($this->path) + 1));
+                if($prefix === "" || str_starts_with(strtolower($relative), $prefix)){
+                    $files[] = $relative;
+                }
+            }
+        }
+
+        sort($files);
+        return $files;
+    }
+
+    /**
      * Parses a JSON content file, returning null (and telling the caller why) when it is not usable.
      */
     public function readContentJson(string $relative, ?string &$error = null) : ?array{

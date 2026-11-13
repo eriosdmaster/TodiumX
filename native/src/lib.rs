@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use chunk::{Chunk, Storage, SubChunk, MAX_LAYERS, SIZE, SUBCHUNKS};
 
 /// Bumped whenever a function below changes, PHP refuses a library it does not know.
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 struct Entry {
     chunk: Chunk,

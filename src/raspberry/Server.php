@@ -116,12 +116,16 @@ use raspberry\command\defaults\EffectCommand;
 use raspberry\command\defaults\GiveCommand;
 use raspberry\command\defaults\BehaviorPackCommand;
 use raspberry\command\defaults\FunctionCommand;
+use raspberry\command\defaults\ScriptApiCommand;
+use raspberry\command\defaults\ScriptEventCommand;
 
 use raspberry\console\ConsoleReader;
 
 use raspberry\permission\OperatorList;
 use raspberry\pack\ResourcePackManager;
 use raspberry\pack\BehaviorPackManager;
+use raspberry\pack\script\ScriptManager;
+use raspberry\pack\script\ServerScriptBridge;
 use raspberry\pack\FunctionRunner;
 use raspberry\permission\PermissionManager;
 use raspberry\plugin\PluginManager;
@@ -214,6 +218,7 @@ class Server{
         "auto-save-interval" => 300,
         "keep-inventory" => false,
         "debug-logging" => false,
+        "script-api-enabled" => true,
         "nethernet-public-ip" => "",
         "nethernet-udp-port" => 0
     ];
@@ -287,6 +292,8 @@ class Server{
 
     private ResourcePackManager $resourcePackManager;
     private BehaviorPackManager $behaviorPackManager;
+
+    private ?ScriptManager $scriptManager = null;
     private FunctionRunner $functionRunner;
     private PluginContentRegistry $pluginContentRegistry;
     private PluginManager $pluginManager;
@@ -387,6 +394,16 @@ class Server{
 
         $this->registerCommands();
 
+        //Script API: hosts the @minecraft/server module for behavior pack script modules
+        $this->scriptManager = new ScriptManager(
+            $this->behaviorPackManager,
+            $this->logger,
+            new ServerScriptBridge($this),
+            Path::join($this->dataPath, "script_data"),
+            $this->properties->getBool("script-api-enabled")
+        );
+        $this->scriptManager->load();
+
         $this->pluginManager = new PluginManager($this, Path::join($this->dataPath, "plugins"));
         $this->pluginManager->loadPlugins();
         $this->pluginManager->enablePlugins();
@@ -398,6 +415,10 @@ class Server{
 
     public function getBehaviorPackManager() : BehaviorPackManager{
         return $this->behaviorPackManager;
+    }
+
+    public function getScriptManager() : ?ScriptManager{
+        return $this->scriptManager;
     }
 
     public function getFunctionRunner() : FunctionRunner{
@@ -817,6 +838,7 @@ class Server{
         if($joinMessage !== ""){
             $this->broadcastMessage($joinMessage);
         }
+        $this->scriptManager?->emitPlayerJoin(ServerScriptBridge::playerSnapshot($player));
     }
 
     /**
@@ -835,6 +857,7 @@ class Server{
             $this->pluginManager->callEvent($ev);
             $quitMessage = $ev->getQuitMessage();
         }
+        $this->scriptManager?->emitPlayerLeave(ServerScriptBridge::playerSnapshot($player));
         if($quitMessage !== ""){
             $this->broadcastMessage($quitMessage, $player);
         }
@@ -867,6 +890,11 @@ class Server{
             if($ev->isCancelled()){
                 return;
             }
+            //world.beforeEvents.chatSend: scripts may cancel the message too
+            if($this->scriptManager?->emitChatBefore(ServerScriptBridge::playerSnapshot($player), $ev->getMessage())){
+                return;
+            }
+            $this->scriptManager?->emitChatAfter(ServerScriptBridge::playerSnapshot($player), $ev->getMessage());
             $message = $ev->getMessage();
             $format = $ev->getFormat();
         }
@@ -1061,6 +1089,8 @@ class Server{
             "effect" => "op",
             "behaviorpack" => "op",
             "function" => "op",
+            "scriptapi" => "op",
+            "scriptevent" => "op",
             "save-all" => "op",
             "stop" => "op"
         ] as $command => $default){
@@ -1092,6 +1122,8 @@ class Server{
             new EffectCommand(),
             new BehaviorPackCommand(),
             new FunctionCommand(),
+            new ScriptApiCommand(),
+            new ScriptEventCommand(),
             new SaveAllCommand(),
             new StopCommand(),
             new VersionCommand()
@@ -1248,6 +1280,7 @@ class Server{
         }finally{
             $this->running = false;
 
+            $this->scriptManager?->stop();
             $this->consoleReader?->close();
             $this->disconnectAll();
             $this->transport->shutdown();
@@ -1420,6 +1453,7 @@ class Server{
             $world->tick($this->currentTick);
         }
 
+        $this->scriptManager?->tick($this->currentTick);
 
         if($this->autoSaveTicks > 0 && $this->currentTick % $this->autoSaveTicks === 0){
             $this->saveWorlds(false);

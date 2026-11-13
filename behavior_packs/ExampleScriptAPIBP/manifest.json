@@ -1,0 +1,33 @@
+{
+    "format_version": 2,
+    "header": {
+        "description": "Exemplo de Script API do TodiumX: eventos de chat/join, timers do system, scriptevents e runCommand via @minecraft/server.",
+        "name": "Example Script API (Behavior)",
+        "uuid": "41e000ef-c384-407d-b44d-008fc4f48d4d",
+        "version": [1, 0, 0],
+        "min_engine_version": [1, 20, 0],
+        "capabilities": ["script_eval"]
+    },
+    "modules": [
+        {
+            "description": "Conteudo de dados do Example Script API",
+            "type": "data",
+            "uuid": "741fae43-9ecd-427d-b018-6cae1052cad4",
+            "version": [1, 0, 0]
+        },
+        {
+            "description": "Scripts de exemplo do Example Script API",
+            "type": "script",
+            "language": "javascript",
+            "uuid": "fe693d2f-3a58-4cd1-8528-a99e85831753",
+            "version": [1, 0, 0],
+            "entry": "scripts/main.js"
+        }
+    ],
+    "dependencies": [
+        {
+            "module_name": "@minecraft/server",
+            "version": "1.16.0"
+        }
+    ]
+}
