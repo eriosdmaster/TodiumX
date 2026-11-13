@@ -25,7 +25,7 @@ class ScriptApiCommand extends Command{
 		$this->setPermission("raspberry.command.scriptapi");
 
 		$this->setArgument(0, CommandParameter::enum("action", new CommandEnum("ScriptApiAction", ["status", "list", "reload", "eval"])));
-		$this->setArgument(1, CommandParameter::string("code"), 1);
+		$this->setArgument(1, CommandParameter::message("code", true));
 	}
 
 	public function onSent(CommandSender $sender, array $args) : void{
