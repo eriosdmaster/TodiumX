@@ -3,10 +3,12 @@ import { world, system } from "@minecraft/server";
 /**
  * Exemplo de Script API do TodiumX.
  *
- * Este arquivo roda no host Node.js do TodiumX (resources/scriptapi/host.js) e
- * usa a mesma surface do @minecraft/server oficial implementada pelo servidor:
- * world.beforeEvents/afterEvents, system.run*, dynamic properties, runCommand e
- * scriptevents. Veja SCRIPT_API.md na raiz do projeto.
+ * Este arquivo roda no host nativo do TodiumX (QuickJS embutido na
+ * libraspberry_native.so, sem Node.js) e usa a surface @minecraft/server
+ * declarada em ScriptApiRegistry (o manifest viaje para o host e o modulo
+ * e montado por versao automaticamente): world.beforeEvents/afterEvents,
+ * system.run*, dynamic properties, runCommand, scriptevents, entidades,
+ * scoreboard, tags e eventos de bloco. Veja SCRIPT_API.md na raiz do projeto.
  */
 
 // 1) world.afterEvents.playerJoin: boas-vindas quando um jogador entra
@@ -68,3 +70,47 @@ world.afterEvents.playerLeave.subscribe((event) => {
 });
 
 console.log("ExampleScriptAPIBP carregado; timer de status id=" + statusRunId);
+
+// ---------------------------------------------------------------------------
+// APIs novas (desde 1.16.0 do TodiumX): o modulo e montado a partir de
+// ScriptApiRegistry — estas secoes so existem para packs que declaram >= 1.16.0
+// ---------------------------------------------------------------------------
+
+// 9) world.afterEvents.worldLoad: dispara uma vez, no primeiro tick do host
+world.afterEvents.worldLoad.subscribe(() => {
+	world.sendMessage("§a[ScriptAPI] mundo carregado - surface completa de API disponivel");
+});
+
+// 10) eventos de bloco (alimentados pelo engine via ScriptEventSink)
+world.afterEvents.playerBreakBlock.subscribe((event) => {
+	world.sendMessage(`§7[ScriptAPI] ${event.player.name} quebrou ${event.block.type} em ${event.block.location.x}, ${event.block.location.y}, ${event.block.location.z}`);
+});
+
+world.afterEvents.playerPlaceBlock.subscribe((event) => {
+	world.sendMessage(`§7[ScriptAPI] ${event.player.name} colocou ${event.block.type}`);
+});
+
+// 11) world.getEntities / world.getEntity: promises resolvidas no proximo tick
+world.getEntities().then((entities) => {
+	world.sendMessage(`§7[ScriptAPI] ${entities.length} entidade(s) no servidor agora (world.getEntities)`);
+	if (entities.length > 0) {
+		world.sendMessage(`§7[ScriptAPI] primeira entidade: ${entities[0].name} (${entities[0].type})`);
+	}
+}).catch((error) => {
+	console.error("world.getEntities falhou: " + error);
+});
+
+// 12) tags de jogador (valem por sessao) + getGameMode
+world.afterEvents.playerJoin.subscribe((event) => {
+	event.player.addTag("scriptapi:visited");
+	world.sendMessage(`§7[ScriptAPI] tags de ${event.player.name}: [${event.player.getTags().join(", ")}] gamemode: ${event.player.getGameMode() ?? "desconhecido"}`);
+});
+
+// 13) scoreboard: world.scoreboard.* tambem e promise (ponte com o PHP)
+world.scoreboard.addObjective("scriptapi_demo", "dummy", "§bScriptAPI§r").then((created) => {
+	if (created) {
+		world.sendMessage("§a[ScriptAPI] objetivo 'scriptapi_demo' criado no scoreboard");
+	}
+}).catch((error) => {
+	console.warn("scoreboard.addObjective: " + error);
+});

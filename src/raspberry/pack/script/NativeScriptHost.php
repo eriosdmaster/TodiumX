@@ -58,16 +58,26 @@ final class NativeScriptHost{
 	}
 
 	/**
-	 * Hands every pack's script sources to the host at once.
+	 * Hands every pack's script sources to the host at once, together with the
+	 * Script API manifest (ScriptApiRegistry) the shim builds the API surface
+	 * from. Packs carry their declared @minecraft/server version in "version".
 	 *
-	 * @param list<array{id: string, name: string, entry: string, files: array<string, string>}> $packs
+	 * @param list<array{id: string, name: string, entry: string, version?: ?string, files: array<string, string>}> $packs
+	 * @param array{maxVersion: string, surfaces: list<array<string, mixed>>} $apiManifest
 	 */
-	public function loadPacks(array $packs) : bool{
+	public function loadPacks(array $packs, array $apiManifest = []) : bool{
 		if($this->handle <= 0 || $packs === []){
 			return false;
 		}
 
-		return Native::apiHostLoad($this->handle, json_encode($packs, JSON_UNESCAPED_SLASHES));
+		if($apiManifest === []){
+			//old native library without manifest support: plain array payload
+			return Native::apiHostLoad($this->handle, json_encode($packs, JSON_UNESCAPED_SLASHES));
+		}
+
+		$payload = ["packs" => $packs, "api" => $apiManifest];
+
+		return Native::apiHostLoad($this->handle, json_encode($payload, JSON_UNESCAPED_SLASHES));
 	}
 
 	/**

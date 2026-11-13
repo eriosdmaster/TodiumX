@@ -10,11 +10,13 @@ use raspberry\command\CommandException;
 use raspberry\command\CommandParameter;
 use raspberry\command\CommandSender;
 
+use raspberry\pack\script\ScriptApiVersion;
 use raspberry\pack\script\ScriptManager;
 use raspberry\Server;
 use raspberry\utils\TextFormat;
 
 use function count;
+use function trim;
 
 class ScriptApiCommand extends Command{
 
@@ -24,8 +26,8 @@ class ScriptApiCommand extends Command{
 		$this->setDescription($this->translate("command.scriptapi.description"));
 		$this->setPermission("raspberry.command.scriptapi");
 
-		$this->setArgument(0, CommandParameter::enum("action", new CommandEnum("ScriptApiAction", ["status", "list", "reload", "eval"])));
-		$this->setArgument(1, CommandParameter::message("code", true));
+		$this->setArgument(0, CommandParameter::enum("action", new CommandEnum("ScriptApiAction", ["status", "list", "reload", "eval", "version"])));
+		$this->setArgument(1, CommandParameter::message("value", true));
 	}
 
 	public function onSent(CommandSender $sender, array $args) : void{
@@ -47,7 +49,11 @@ class ScriptApiCommand extends Command{
 				return;
 
 			case "eval":
-				$this->runEval($sender, $manager, (string) ($args["code"] ?? ""));
+				$this->runEval($sender, $manager, (string) ($args["value"] ?? ""));
+				return;
+
+			case "version":
+				$this->runVersion($sender, $manager, trim((string) ($args["value"] ?? "")));
 				return;
 		}
 
@@ -90,6 +96,37 @@ class ScriptApiCommand extends Command{
 				"entry" => $pack["entry"]
 			]) . ($pack["error"] !== null ? " - " . $pack["error"] : ""));
 		}
+	}
+
+	private function runVersion(CommandSender $sender, ScriptManager $manager, string $value) : void{
+		if($value === ""){
+			$sender->sendMessage($this->translate("command.scriptapi.version.current", [
+				"version" => $manager->getVersionSetting(),
+				"implemented" => ScriptApiVersion::IMPLEMENTED,
+				"check" => $manager->getVersionCheck()
+			]));
+
+			foreach($manager->getStatus()["packs"] as $pack){
+				$sender->sendMessage($this->translate("command.scriptapi.version.pack", [
+					"name" => $pack["name"],
+					"declared" => $pack["version"] ?? $this->translate("command.scriptapi.version.none"),
+					"state" => $pack["ok"] ? "ok" : "failed"
+				]));
+			}
+			return;
+		}
+
+		$normalized = ScriptApiVersion::normalize($value);
+
+		if($normalized === null || !Server::getInstance()->setScriptApiVersion($normalized)){
+			throw new CommandException($this->translate("command.scriptapi.version.invalid", ["value" => $value]));
+		}
+
+		$loaded = $manager->reload();
+		$sender->sendMessage($this->translate("command.scriptapi.version.set", [
+			"version" => $normalized,
+			"count" => $loaded
+		]));
 	}
 
 	private function runEval(CommandSender $sender, ScriptManager $manager, string $code) : void{

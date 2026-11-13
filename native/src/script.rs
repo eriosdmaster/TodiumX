@@ -4,15 +4,20 @@
 //!
 //! One runtime serves every active pack, like vanilla: each pack entry is
 //! compiled as an ES module named "<pack-id>|<entry path>" and its relative
-//! imports resolve inside the pack through the custom module loader below;
-//! `@minecraft/server` is a fixed facade module re-exporting the shim's API.
+//! imports resolve inside the pack through the custom module loader below.
+//! `@minecraft/server` resolves PER PACK VERSION: "<pack>|entry" importing it
+//! gets "@minecraft/server@<declared version>", and the loader builds a facade
+//! that re-exports globalThis.__tosapi.buildApi(version) — the version decides
+//! which API surfaces exist (ScriptApiRegistry on the PHP side is the source
+//! of truth; its manifest rides along in the load payload).
 //!
 //! All orchestration lives in the JS shim (native/src/tosapi_shim.js); Rust
 //! keeps the module loader, the dynamic property file, the op queue and the
 //! C ABI PHP calls (see raspberry\pack\script\NativeScriptHost):
 //!
 //!   rx_api_host_new(data_dir) -> handle
-//!   rx_api_host_load(handle, packs_json)              [{id,name,entry,files:{rel:src}}]
+//!   rx_api_host_load(handle, packs_json)              {"packs":[{id,name,entry,version,files}], "api":{manifest}}
+//!                                                     (a plain [...] payload also works: legacy)
 //!   rx_api_host_tick(handle, tick, players_json)      timers + snapshot
 //!   rx_api_host_emit(handle, event, request_id, data_json, out, out_len)
 //!                                                     sync events (beforeChatSend)
@@ -36,13 +41,39 @@ use rquickjs::{Context, Coerced, Ctx, Error, Function, Module, Null, Runtime};
 
 const SHIM: &str = include_str!("tosapi_shim.js");
 
-/** the module behavior packs import; re-exports what the shim built */
+/** the legacy facade (used only when a bare "@minecraft/server" name still reaches the loader) */
 const SERVER_MODULE_FACADE: &str = r#"
 const api = globalThis.__tosapi.api;
 export const world = api.world;
 export const system = api.system;
 export const MinecraftDimensionTypes = api.MinecraftDimensionTypes;
+export const TicksPerSecond = api.TicksPerSecond;
 "#;
+
+/** the per-version facade the loader declares for "@minecraft/server@<version>" */
+fn server_facade(version: &str) -> String {
+    format!(
+        r#"const api = globalThis.__tosapi.buildApi("{version}");
+export const world = api.world;
+export const system = api.system;
+export const MinecraftDimensionTypes = api.MinecraftDimensionTypes;
+export const TicksPerSecond = api.TicksPerSecond;
+"#
+    )
+}
+
+/** keeps only version-safe characters; anything else falls back to $fallback */
+fn sanitize_version(version: &str, fallback: &str) -> String {
+    let cleaned: String = version
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
+        .collect();
+    if cleaned.is_empty() {
+        fallback.to_string()
+    } else {
+        cleaned
+    }
+}
 
 /** modules packs may try to import that this Script API does not provide */
 const UNSUPPORTED_MODULES: &[&str] = &[
@@ -73,6 +104,10 @@ struct ScriptVm {
     _runtime: Runtime,
     ops: Arc<Mutex<Vec<String>>>,
     store: Arc<Mutex<PackStore>>,
+    /// pack id -> @minecraft/server version its module is built for
+    api_versions: Arc<Mutex<HashMap<String, String>>>,
+    /// version used when a pack declares none and for sanitizing
+    default_version: Arc<Mutex<String>>,
     /// unix ms deadline while eval runs; 0 disables the interrupt
     deadline: Arc<AtomicI64>,
 }
@@ -136,12 +171,34 @@ fn normalize_path(path: &str) -> String {
 
 struct TosapiResolver {
     store: Arc<Mutex<PackStore>>,
+    api_versions: Arc<Mutex<HashMap<String, String>>>,
+    default_version: Arc<Mutex<String>>,
+}
+
+impl TosapiResolver {
+    /// The @minecraft/server module name for the pack that owns `base`
+    /// ("<pack-id>|<path>"), so every pack gets the surface of its own version.
+    fn server_module_for(&self, base: &str) -> String {
+        let pack = split_name(base).0;
+        let fallback = self
+            .default_version
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|_| "1.16.0".to_string());
+        let version = self
+            .api_versions
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(pack).cloned())
+            .unwrap_or(fallback);
+        format!("@minecraft/server@{version}")
+    }
 }
 
 impl Resolver for TosapiResolver {
     fn resolve<'js>(&mut self, _ctx: &Ctx<'js>, base: &str, name: &str) -> rquickjs::Result<String> {
         if name == "@minecraft/server" {
-            return Ok(name.to_string());
+            return Ok(self.server_module_for(base));
         }
 
         let deny = |message: String| Err(Error::Resolving {
@@ -187,6 +244,10 @@ struct TosapiLoader {
 
 impl Loader for TosapiLoader {
     fn load<'js>(&mut self, ctx: &Ctx<'js>, name: &str) -> rquickjs::Result<Module<'js, Declared>> {
+        if let Some(version) = name.strip_prefix("@minecraft/server@") {
+            let facade = server_facade(&sanitize_version(version, "1.16.0"));
+            return Module::declare(ctx.clone(), name, facade);
+        }
         if name == "@minecraft/server" {
             return Module::declare(ctx.clone(), name, SERVER_MODULE_FACADE);
         }
@@ -264,6 +325,8 @@ fn create_host(data_dir: &str) -> u64 {
 
     let store: Arc<Mutex<PackStore>> = Arc::new(Mutex::new(HashMap::new()));
     let ops: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let api_versions: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    let default_version: Arc<Mutex<String>> = Arc::new(Mutex::new("1.16.0".to_string()));
 
     //unhandled promise rejections (top-level await in an entry module, dropped
     //runCommand promises) surface here instead of vanishing
@@ -284,6 +347,8 @@ fn create_host(data_dir: &str) -> u64 {
     runtime.set_loader(
         TosapiResolver {
             store: store.clone(),
+            api_versions: api_versions.clone(),
+            default_version: default_version.clone(),
         },
         TosapiLoader {
             store: store.clone(),
@@ -339,6 +404,8 @@ fn create_host(data_dir: &str) -> u64 {
                     _runtime: runtime,
                     ops,
                     store,
+                    api_versions,
+                    default_version,
                     deadline,
                 })),
             );
@@ -356,7 +423,9 @@ fn global_call<'js, A: IntoArgs<'js>>(ctx: &Ctx<'js>, name: &str, args: A) -> Op
 }
 
 /// Loads the packs into the store, evaluates each entry module and reports
-/// "loaded" ops. packs_json: [{"id","name","entry","files":{rel:source}}].
+/// "loaded" ops. packs_json is either the legacy array
+/// [{"id","name","entry","files":{rel:source}}] or the envelope
+/// {"packs":[...same, plus "version"...], "api": ScriptApiRegistry manifest}.
 fn load_packs(vm: &ScriptVm, packs_json: &str) -> bool {
     let parsed: serde_json::Value = match serde_json::from_str(packs_json) {
         Ok(parsed) => parsed,
@@ -366,18 +435,53 @@ fn load_packs(vm: &ScriptVm, packs_json: &str) -> bool {
         }
     };
 
-    let packs = match parsed.as_array() {
-        Some(packs) => packs.clone(),
-        None => {
-            push_log(&vm.ops, "error", "pack payload must be an array".to_string());
+    let (packs, manifest) = match &parsed {
+        serde_json::Value::Array(packs) => (packs.clone(), None),
+        serde_json::Value::Object(object) => {
+            let packs = object
+                .get("packs")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let manifest = object.get("api").filter(|value| value.is_object()).cloned();
+            (packs, manifest)
+        }
+        _ => {
+            push_log(&vm.ops, "error", "pack payload must be an array or an envelope".to_string());
             return false;
         }
     };
+
+    //hand the API manifest to the shim before any module is evaluated, so the
+    //per-version facades build from it; the default version follows maxVersion
+    if let Some(manifest) = &manifest {
+        let manifest_json = manifest.to_string();
+        let default = manifest
+            .get("maxVersion")
+            .and_then(|value| value.as_str())
+            .unwrap_or("1.16.0")
+            .to_string();
+        vm.context
+            .with(|ctx| global_call(&ctx, "__tosapiSetManifest", (manifest_json.as_str(),)));
+        if let Ok(mut guard) = vm.default_version.lock() {
+            *guard = sanitize_version(&default, "1.16.0");
+        }
+        drain_jobs(vm);
+    }
+    let default_version = vm
+        .default_version
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| "1.16.0".to_string());
 
     for pack in packs {
         let id = pack.get("id").and_then(|value| value.as_str()).unwrap_or("").to_string();
         let name = pack.get("name").and_then(|value| value.as_str()).unwrap_or("unnamed pack").to_string();
         let entry = pack.get("entry").and_then(|value| value.as_str()).unwrap_or("").to_string();
+        let version = sanitize_version(
+            pack.get("version").and_then(|value| value.as_str()).unwrap_or(""),
+            &default_version,
+        );
         let mut files: HashMap<String, String> = HashMap::new();
         if let Some(map) = pack.get("files").and_then(|value| value.as_object()) {
             for (path, source) in map {
@@ -390,6 +494,10 @@ fn load_packs(vm: &ScriptVm, packs_json: &str) -> bool {
         if id.is_empty() || entry.is_empty() {
             push_log(&vm.ops, "error", "pack payload needs id and entry".to_string());
             continue;
+        }
+
+        if let Ok(mut guard) = vm.api_versions.lock() {
+            guard.insert(id.clone(), version);
         }
 
         vm.store.lock().ok().map(|mut store| {

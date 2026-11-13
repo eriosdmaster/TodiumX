@@ -25,6 +25,7 @@ use raspberry\network\mcpe\protocol\LevelSoundEventPacket;
 use raspberry\network\mcpe\protocol\types\LevelEvent;
 use raspberry\network\mcpe\protocol\types\LevelSoundEvent;
 
+use raspberry\pack\script\ScriptEventSink;
 use raspberry\world\Chunk;
 
 use function intdiv;
@@ -278,6 +279,7 @@ class BlockBreaker{
         $entity = $world->getBlockEntity($x, $y, $z);
 
         $world->setBlock($x, $y, $z, $this->air());
+        ScriptEventSink::playerBreakBlock($player, $block->getName(), $x, $y, $z);
         $particles = LevelEventPacket::create(LevelEvent::PARTICLES_DESTROY_BLOCK, $x + 0.5, $y + 0.5, $z + 0.5, $this->getNetworkId($block));
         $this->broadcast($particles, $x, $z);
 

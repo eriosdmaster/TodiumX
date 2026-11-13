@@ -124,6 +124,8 @@ use raspberry\console\ConsoleReader;
 use raspberry\permission\OperatorList;
 use raspberry\pack\ResourcePackManager;
 use raspberry\pack\BehaviorPackManager;
+use raspberry\pack\script\ScriptApiVersion;
+use raspberry\pack\script\ScriptEventSink;
 use raspberry\pack\script\ScriptManager;
 use raspberry\pack\script\ServerScriptBridge;
 use raspberry\pack\FunctionRunner;
@@ -219,6 +221,8 @@ class Server{
         "keep-inventory" => false,
         "debug-logging" => false,
         "script-api-enabled" => true,
+        "script-api-version" => "auto",
+        "script-api-version-check" => "warn",
         "nethernet-public-ip" => "",
         "nethernet-udp-port" => 0
     ];
@@ -399,15 +403,24 @@ class Server{
             $this->loadNative();
         }
 
+        $scriptApiVersion = ScriptApiVersion::normalize($this->properties->getString("script-api-version"));
+        if($scriptApiVersion === null){
+            $this->logger->warning("[ScriptAPI] script-api-version '" . $this->properties->getString("script-api-version") . "' in server.properties is not 'auto' or a version like 1.16.0; using auto");
+            $scriptApiVersion = ScriptApiVersion::AUTO;
+        }
+
         //Script API: hosts the @minecraft/server module for behavior pack script modules
         $this->scriptManager = new ScriptManager(
             $this->behaviorPackManager,
             $this->logger,
             new ServerScriptBridge($this),
             Path::join($this->dataPath, "script_data"),
-            $this->properties->getBool("script-api-enabled")
+            $this->properties->getBool("script-api-enabled"),
+            $scriptApiVersion,
+            ScriptApiVersion::normalizeCheck($this->properties->getString("script-api-version-check"))
         );
         $this->scriptManager->load();
+        ScriptEventSink::attach($this->scriptManager);
 
         $this->pluginManager = new PluginManager($this, Path::join($this->dataPath, "plugins"));
         $this->pluginManager->loadPlugins();
@@ -420,6 +433,26 @@ class Server{
 
     public function getBehaviorPackManager() : BehaviorPackManager{
         return $this->behaviorPackManager;
+    }
+
+    /**
+     * Changes the Script API version the server presents ("auto" or a version like 1.16.0) and saves it
+     * in server.properties. The script packs are not reloaded here; /scriptapi version does that.
+     *
+     * @return bool false when $version is not "auto" or a version
+     */
+    public function setScriptApiVersion(string $version) : bool{
+        $normalized = ScriptApiVersion::normalize($version);
+
+        if($normalized === null){
+            return false;
+        }
+
+        $this->scriptManager?->setVersionSetting($normalized);
+        $this->properties->set("script-api-version", $normalized);
+        $this->properties->save();
+
+        return true;
     }
 
     public function getScriptManager() : ?ScriptManager{
@@ -1285,6 +1318,7 @@ class Server{
         }finally{
             $this->running = false;
 
+            ScriptEventSink::attach(null);
             $this->scriptManager?->stop();
             $this->consoleReader?->close();
             $this->disconnectAll();

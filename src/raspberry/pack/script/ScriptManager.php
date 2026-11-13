@@ -13,23 +13,29 @@ use function array_sum;
 use function count;
 use function in_array;
 use function intdiv;
+use function is_array;
+use function is_float;
 use function is_int;
 use function is_string;
+use function json_encode;
+use function preg_match;
 use function strlen;
 use function strtolower;
 use function substr;
 
+use const JSON_UNESCAPED_SLASHES;
+
 /**
  * Loads the "script" modules of active behavior packs into the Script API host
  * (the embedded QuickJS runtime of the native library, rquickjs 0.9 — no
- * Node.js involved) and bridges server events, ticks and commands between PHP
- * and the scripts.
+ * Node.js involved) and bridges server events, ticks, commands and API calls
+ * between PHP and the scripts.
  *
- * Supported surface (see SCRIPT_API.md): world.beforeEvents.chatSend (cancellable),
- * world.afterEvents.playerJoin/playerLeave/playerSpawn/chatSend, system.run /
- * runTimeout / runInterval / clearRun, system.afterEvents.scriptEventReceive,
- * system.sendScriptEvent, world/Player/Dimension dynamic properties and
- * dimension/player runCommand.
+ * The @minecraft/server surface is data-driven: ScriptApiRegistry declares
+ * every row (path, since version, kind) and the shim rebuilds the module per
+ * pack version from the manifest sent along with the pack payload. Adding a
+ * new API means adding a registry row (plus a bridge handler when the server
+ * has to act) — not touching this class. See SCRIPT_API.md.
  */
 final class ScriptManager{
 
@@ -40,7 +46,7 @@ final class ScriptManager{
 
 	private ?string $startError = null;
 
-	/** @var array<string, array{name: string, entry: string, ok: bool, error: ?string}> pack uuid => load state */
+	/** @var array<string, array{name: string, entry: string, ok: bool, error: ?string, version?: ?string}> pack uuid => load state */
 	private array $scriptPacks = [];
 
 	private bool $loaded = false;
@@ -50,8 +56,88 @@ final class ScriptManager{
 		private Logger $logger,
 		private ScriptApiBridge $bridge,
 		private string $dataDir,
-		private bool $enabled = true
+		private bool $enabled = true,
+		private string $versionSetting = ScriptApiVersion::AUTO,
+		private string $versionCheck = ScriptApiVersion::CHECK_WARN
 	){}
+
+	/**
+	 * The Script API version the server presents: "auto" (every pack runs with the version it declares)
+	 * or a fixed version like "1.16.0", the highest @minecraft/server version the server accepts.
+	 */
+	public function getVersionSetting() : string{
+		return $this->versionSetting;
+	}
+
+	/**
+	 * @return bool false when $version is not "auto" or a version
+	 */
+	public function setVersionSetting(string $version) : bool{
+		$normalized = ScriptApiVersion::normalize($version);
+
+		if($normalized === null){
+			return false;
+		}
+
+		$this->versionSetting = $normalized;
+
+		return true;
+	}
+
+	/**
+	 * What happens to a pack that needs a newer version than the server presents: "warn" (log it, load
+	 * the pack), "strict" (do not load it) or "off" (say nothing).
+	 */
+	public function getVersionCheck() : string{
+		return $this->versionCheck;
+	}
+
+	public function setVersionCheck(string $check) : void{
+		$this->versionCheck = ScriptApiVersion::normalizeCheck($check);
+	}
+
+	/**
+	 * Why a pack that declares $declared cannot run on this server, or null when it can. Only a fixed
+	 * version can refuse a pack; "auto" has no limit.
+	 */
+	private function getVersionProblem(?string $declared) : ?string{
+		if($declared === null || $this->versionSetting === ScriptApiVersion::AUTO){
+			return null;
+		}
+
+		$declaredVersion = ScriptApiVersion::normalize($declared);
+
+		if($declaredVersion === null || $declaredVersion === ScriptApiVersion::AUTO){
+			return null;
+		}
+
+		if(ScriptApiVersion::compare($declaredVersion, $this->versionSetting) > 0){
+			return "needs @minecraft/server " . $declared . ", but the server Script API version is " . $this->versionSetting;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Notes that do not stop a pack from loading: an unreadable version, or APIs the surface may not have.
+	 */
+	private function getVersionNote(?string $declared) : ?string{
+		if($declared === null){
+			return null;
+		}
+
+		$declaredVersion = ScriptApiVersion::normalize($declared);
+
+		if($declaredVersion === null || $declaredVersion === ScriptApiVersion::AUTO){
+			return "declares the @minecraft/server version '" . $declared . "', which is not a version like 1.16.0";
+		}
+
+		if(ScriptApiVersion::compare($declaredVersion, ScriptApiVersion::IMPLEMENTED) > 0){
+			return "declares @minecraft/server " . $declared . ", newer than the " . ScriptApiVersion::IMPLEMENTED . " this Script API implements; APIs added after it may be missing";
+		}
+
+		return null;
+	}
 
 	public function isEnabled() : bool{
 		return $this->enabled;
@@ -73,6 +159,8 @@ final class ScriptManager{
 		$this->stop();
 
 		$candidates = [];
+		/** @var array<string, array{name: string, entry: string, ok: bool, error: ?string, version?: ?string}> packs the version check refused */
+		$refused = [];
 		$totalBytes = 0;
 		$totalFiles = 0;
 
@@ -91,10 +179,35 @@ final class ScriptManager{
 					"name" => $pack->getName(),
 					"entry" => $entry,
 					"ok" => false,
-					"error" => $exception->getMessage()
+					"error" => $exception->getMessage(),
+					"version" => $manifest->getScriptModuleVersions()["@minecraft/server"] ?? null
 				];
 				$this->logger->error("[ScriptAPI] pack " . $pack->getName() . ": " . $exception->getMessage());
 				continue;
+			}
+
+			$declared = $manifest->getScriptModuleVersions()["@minecraft/server"] ?? null;
+
+			if($this->versionCheck !== ScriptApiVersion::CHECK_OFF){
+				$problem = $this->getVersionProblem($declared);
+
+				if($problem !== null && $this->versionCheck === ScriptApiVersion::CHECK_STRICT){
+					$refused[$pack->getUuid()] = [
+						"name" => $pack->getName(),
+						"entry" => $entry,
+						"ok" => false,
+						"error" => "pack " . $problem,
+						"version" => $declared
+					];
+					$this->logger->error("[ScriptAPI] pack " . $pack->getName() . " " . $problem . " (script-api-version-check=strict, pack not loaded)");
+					continue;
+				}
+
+				$problem ??= $this->getVersionNote($declared);
+
+				if($problem !== null){
+					$this->logger->warning("[ScriptAPI] pack " . $pack->getName() . " " . $problem);
+				}
 			}
 
 			$totalBytes += array_sum(array_map(strlen(...), $files));
@@ -102,11 +215,18 @@ final class ScriptManager{
 			$candidates[$pack->getUuid()] = [
 				"pack" => $pack,
 				"entry" => $entry,
-				"files" => $files
+				"files" => $files,
+				"version" => $declared
 			];
 		}
 
+		if($candidates !== [] && $this->versionSetting !== ScriptApiVersion::AUTO && $this->versionCheck !== ScriptApiVersion::CHECK_OFF
+			&& ScriptApiVersion::compare($this->versionSetting, ScriptApiVersion::IMPLEMENTED) > 0){
+			$this->logger->warning("[ScriptAPI] script-api-version " . $this->versionSetting . " is newer than the " . ScriptApiVersion::IMPLEMENTED . " this Script API implements; packs are accepted up to that version, but APIs added after " . ScriptApiVersion::IMPLEMENTED . " do not exist");
+		}
+
 		if($candidates === []){
+			$this->scriptPacks += $refused;
 			$this->logger->info("[ScriptAPI] no behavior pack has script modules; host not started");
 			return 0;
 		}
@@ -116,6 +236,7 @@ final class ScriptManager{
 
 		if(!$host->start($error)){
 			$this->startError = $error ?? "unknown host error";
+			$this->scriptPacks += $refused;
 			$this->logger->warning("[ScriptAPI] " . $this->startError . " Script packs: " . count($candidates) . " (not loaded).");
 			return 0;
 		}
@@ -129,18 +250,23 @@ final class ScriptManager{
 				"name" => $candidate["pack"]->getName(),
 				"entry" => $candidate["entry"],
 				"ok" => false,
-				"error" => null
+				"error" => null,
+				"version" => $candidate["version"]
 			];
 			$payload[] = [
 				"id" => $uuid,
 				"name" => $candidate["pack"]->getName(),
 				"entry" => $candidate["entry"],
+				"version" => $candidate["version"],
 				"files" => $candidate["files"]
 			];
 		}
 
-		//the host loads and evaluates synchronously; the ops are queued on return
-		$host->loadPacks($payload);
+		//the host loads and evaluates synchronously; the ops are queued on return.
+		//the API manifest rides along: the shim rebuilds the @minecraft/server
+		//module per pack version from it (ScriptApiRegistry is the only place
+		//APIs are declared)
+		$host->loadPacks($payload, ScriptApiRegistry::manifest());
 		foreach($host->drain() as $op){
 			$this->waitLoadOp($op);
 		}
@@ -155,6 +281,7 @@ final class ScriptManager{
 			}
 		}
 		$this->logger->info("[ScriptAPI] loaded " . $ok . "/" . count($this->scriptPacks) . " script pack(s)");
+		$this->scriptPacks += $refused;
 
 		return $ok;
 	}
@@ -256,6 +383,14 @@ final class ScriptManager{
 				);
 				return;
 
+			case "apicall":
+				$this->dispatchApiCall(
+					is_int($op["reqId"] ?? null) ? $op["reqId"] : 0,
+					is_string($op["path"] ?? null) ? $op["path"] : "",
+					is_array($op["args"] ?? null) ? $op["args"] : []
+				);
+				return;
+
 			case "response":
 				return; //responses are handled by their callers
 
@@ -266,6 +401,55 @@ final class ScriptManager{
 			default:
 				$this->logger->debug("[ScriptAPI] ignoring unknown host op " . (is_string($kind) ? $kind : "?"));
 		}
+	}
+
+	/**
+	 * Handles one "apicall" op from the shim: dispatches the registry path to
+	 * the bridge and resolves the script's promise through the command-result
+	 * channel. The promise resolves with the JSON-decoded return value, or
+	 * rejects with the error message. Bridge calls therefore settle on the
+	 * next tick, like runCommand().
+	 *
+	 * @param list<mixed> $args
+	 */
+	private function dispatchApiCall(int $reqId, string $path, array $args) : void{
+		if($reqId <= 0 || $path === ""){
+			return;
+		}
+
+		try{
+			$result = match(true){
+				$path === "world.getEntity" => $this->bridge->getEntityById(self::intArg($args, 0)),
+				$path === "world.getEntities" => $this->bridge->getEntities(),
+				$path === "world.getBlock" => $this->bridge->getBlockInfo(self::intArg($args, 0), self::intArg($args, 1), self::intArg($args, 2)),
+				$path === "player.teleport" => $this->bridge->teleportEntity(
+					self::intArg($args, 0),
+					self::floatArg($args, 1),
+					self::floatArg($args, 2),
+					self::floatArg($args, 3),
+					is_string($args[4] ?? null) ? $args[4] : null
+				),
+				preg_match('/^world\.scoreboard\.([A-Za-z]+)$/', $path, $match) === 1
+					=> $this->bridge->scoreboardOperation($match[1], $args),
+				default => throw new ScriptException("no bridge handler for '" . $path . "'")
+			};
+			$this->host?->commandResult($reqId, true, json_encode($result, JSON_UNESCAPED_SLASHES));
+		}catch(\Throwable $exception){
+			$this->logger->error("[ScriptAPI] " . $path . " failed: " . $exception::class . ": " . $exception->getMessage());
+			$this->host?->commandResult($reqId, false, $exception->getMessage());
+		}
+	}
+
+	private static function intArg(array $args, int $index) : int{
+		$value = $args[$index] ?? 0;
+
+		return is_int($value) || is_float($value) ? (int) $value : 0;
+	}
+
+	private static function floatArg(array $args, int $index) : float{
+		$value = $args[$index] ?? 0;
+
+		return is_int($value) || is_float($value) ? (float) $value : 0.0;
 	}
 
 	private function executeScriptCommand(int $reqId, string $commandLine, string $source) : void{
@@ -332,6 +516,34 @@ final class ScriptManager{
 		$this->emit("scriptEvent", ["id" => $id, "message" => $message]);
 	}
 
+	/**
+	 * Fires world.afterEvents.playerBreakBlock (ScriptEventSink, from BlockBreaker).
+	 */
+	public function emitPlayerBreakBlock(array $player, string $blockType, int $x, int $y, int $z) : void{
+		$this->emit("playerBreakBlock", [
+			"player" => $player,
+			"block" => $blockType,
+			"x" => $x,
+			"y" => $y,
+			"z" => $z,
+			"dimension" => $player["dimension"] ?? null
+		]);
+	}
+
+	/**
+	 * Fires world.afterEvents.playerPlaceBlock (ScriptEventSink, from BlockPlacer).
+	 */
+	public function emitPlayerPlaceBlock(array $player, string $blockType, int $x, int $y, int $z) : void{
+		$this->emit("playerPlaceBlock", [
+			"player" => $player,
+			"block" => $blockType,
+			"x" => $x,
+			"y" => $y,
+			"z" => $z,
+			"dimension" => $player["dimension"] ?? null
+		]);
+	}
+
 	private function emit(string $event, array $data) : void{
 		$this->host?->emit($event, $data);
 	}
@@ -385,7 +597,7 @@ final class ScriptManager{
 	}
 
 	/**
-	 * @return array{enabled: bool, running: bool, engine: ?string, error: ?string, packs: list<array{uuid: string, name: string, entry: string, ok: bool, error: ?string}>}
+	 * @return array{enabled: bool, running: bool, engine: ?string, error: ?string, packs: list<array{uuid: string, name: string, entry: string, ok: bool, error: ?string, version: ?string}>}
 	 */
 	public function getStatus() : array{
 		$packs = [];
@@ -396,7 +608,8 @@ final class ScriptManager{
 				"name" => $state["name"],
 				"entry" => $state["entry"],
 				"ok" => $state["ok"],
-				"error" => $state["error"]
+				"error" => $state["error"],
+				"version" => $state["version"] ?? null
 			];
 		}
 

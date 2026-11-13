@@ -49,6 +49,7 @@ final class PackManifest{
      * @param array<string, string> $scriptEntry entry points by module type (e.g. "script" => "scripts/main.js")
      * @param list<string> $capabilities declared experiments/API sets, e.g. "script_eval", "camera"
      * @param array<string, string> $dependencyVersions pack UUID => version string ("1.0.0")
+     * @param array<string, string> $scriptModuleVersions script module name => version as written in the manifest ("@minecraft/server" => "1.16.0")
      */
     private function __construct(
         private string $name,
@@ -62,7 +63,8 @@ final class PackManifest{
         private array $capabilities = [],
         private string $minEngineVersion = "",
         private string $baseGameVersion = "",
-        private array $dependencyVersions = []
+        private array $dependencyVersions = [],
+        private array $scriptModuleVersions = []
     ){}
 
     /**
@@ -139,10 +141,22 @@ final class PackManifest{
 
         $dependencies = [];
         $dependencyVersions = [];
+        $scriptModuleVersions = [];
         $rawDependencies = $data["dependencies"] ?? [];
 
         if(is_array($rawDependencies)){
             foreach($rawDependencies as $dependency){
+                //script modules ("module_name": "@minecraft/server", "version": "1.16.0") are not packs
+                $moduleName = is_array($dependency) ? ($dependency["module_name"] ?? null) : null;
+                if(is_string($moduleName) && $moduleName !== ""){
+                    $moduleVersion = $dependency["version"] ?? null;
+                    if(is_string($moduleVersion)){
+                        $scriptModuleVersions[trim($moduleName)] = trim($moduleVersion);
+                    }elseif(is_array($moduleVersion) && count($moduleVersion) === 3){
+                        $scriptModuleVersions[trim($moduleName)] = implode(".", $moduleVersion);
+                    }
+                }
+
                 $dependencyUuid = is_array($dependency) ? ($dependency["uuid"] ?? null) : null;
 
                 //script modules list "@minecraft/server" as a string version: not a pack UUID
@@ -184,7 +198,7 @@ final class PackManifest{
             $baseGameVersion = trim($rawBaseGame);
         }
 
-        return new self(trim($name), is_string($description) ? $description : "", $uuid, $version, $moduleTypes, $dependencies, $packType, $scriptEntry, $capabilities, $minEngineVersion, $baseGameVersion, $dependencyVersions);
+        return new self(trim($name), is_string($description) ? $description : "", $uuid, $version, $moduleTypes, $dependencies, $packType, $scriptEntry, $capabilities, $minEngineVersion, $baseGameVersion, $dependencyVersions, $scriptModuleVersions);
     }
 
     public function getName() : string{
@@ -251,6 +265,16 @@ final class PackManifest{
      */
     public function getDependencyVersions() : array{
         return $this->dependencyVersions;
+    }
+
+    /**
+     * Script module name => version exactly as the manifest wrote it, e.g. "@minecraft/server" => "1.16.0"
+     * or "1.17.0-beta". Empty for packs without script dependencies.
+     *
+     * @return array<string, string>
+     */
+    public function getScriptModuleVersions() : array{
+        return $this->scriptModuleVersions;
     }
 
     /**

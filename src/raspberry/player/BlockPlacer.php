@@ -44,6 +44,7 @@ use raspberry\network\mcpe\protocol\LevelSoundEventPacket;
 use raspberry\network\mcpe\protocol\types\LevelSoundEvent;
 use raspberry\network\mcpe\protocol\types\inventory\UseItemData;
 
+use raspberry\pack\script\ScriptEventSink;
 use raspberry\world\Chunk;
 
 use function abs;
@@ -409,6 +410,8 @@ class BlockPlacer{
         if($entity instanceof Sign){
             $this->openSign($entity, true);
         }
+
+        ScriptEventSink::playerPlaceBlock($this->player, $world->getBlock($x, $y, $z)->getName(), $x, $y, $z);
 
         return true;
     }
