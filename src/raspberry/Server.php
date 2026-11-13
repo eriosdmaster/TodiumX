@@ -394,6 +394,11 @@ class Server{
 
         $this->registerCommands();
 
+        //The Script API runs on the native library (QuickJS), so it has to be loaded before the scripts are
+        if(!Native::isLoaded()){
+            $this->loadNative();
+        }
+
         //Script API: hosts the @minecraft/server module for behavior pack script modules
         $this->scriptManager = new ScriptManager(
             $this->behaviorPackManager,
