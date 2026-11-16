@@ -529,6 +529,15 @@ const world = {
 	getBlock(x, y, z) {
 		return bridgeCall("world.getBlock", [x, y, z]);
 	},
+	getDefaultSpawnLocation() {
+		return bridgeCall("world.getDefaultSpawnLocation", []);
+	},
+	setDefaultSpawnLocation(...args) {
+		const location = args[0] !== null && typeof args[0] === "object"
+			? { x: args[0].x, y: args[0].y, z: args[0].z }
+			: { x: args[0], y: args[1], z: args[2] };
+		return bridgeCall("world.setDefaultSpawnLocation", [location]);
+	},
 	scoreboard: {},
 	afterEvents: null,
 	beforeEvents: null

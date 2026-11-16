@@ -68,6 +68,8 @@ final class FakeBridge implements ScriptApiBridge{
 	public array $teleports = [];
 	/** @var list<array{method: string, args: list<mixed>}> */
 	public array $scoreboardOps = [];
+	/** @var array{x: float, y: float, z: float}|null */
+	public ?array $spawnLocation = ["x" => 0.5, "y" => 64.0, "z" => 0.5];
 
 	public function broadcastMessage(string $message) : int{
 		$this->broadcasts[] = $message;
@@ -121,6 +123,15 @@ final class FakeBridge implements ScriptApiBridge{
 
 	public function getBlockInfo(int $x, int $y, int $z) : ?array{
 		return ["type" => "minecraft:stone", "location" => ["x" => $x, "y" => $y, "z" => $z]];
+	}
+
+	public function getDefaultSpawnLocation() : ?array{
+		return $this->spawnLocation;
+	}
+
+	public function setDefaultSpawnLocation(float $x, float $y, float $z) : bool{
+		$this->spawnLocation = ["x" => $x, "y" => $y, "z" => $z];
+		return true;
 	}
 
 	public function scoreboardOperation(string $method, array $args) : mixed{
@@ -283,10 +294,17 @@ check(in_array("world.getEntity", $paths116, true), "1.16.0 gets world.getEntity
 check(in_array("world.scoreboard.addObjective", $paths116, true), "1.16.0 gets the scoreboard bridge");
 check(!in_array("world.afterEvents.playerBreakBlock", $paths100, true), "1.0.0 does not get playerBreakBlock");
 check(in_array("world.afterEvents.playerBreakBlock", $paths116, true), "1.16.0 gets playerBreakBlock");
+check(in_array("world.getDefaultSpawnLocation", $paths116, true) && in_array("world.setDefaultSpawnLocation", $paths116, true), "1.16.0 gets the world spawn location bridge");
+check(!in_array("world.getDefaultSpawnLocation", $paths100, true), "1.0.0 does not get world.getDefaultSpawnLocation");
 
 $manifest = ScriptApiRegistry::manifest();
 check($manifest["maxVersion"] === "1.16.0" && is_array($manifest["surfaces"]) && count($manifest["surfaces"]) === count($allRows), "manifest carries maxVersion and every row");
 check(ScriptApiRegistry::surfacesFor("2.5.0-beta") === $rowsFor116, "versions above MAX_VERSION are capped at the implemented surface");
+
+$vectorAxis = new \ReflectionMethod(ScriptManager::class, "vectorAxis");
+check($vectorAxis->invoke(null, [["x" => 4, "y" => 70, "z" => -9]], "y") === 70.0, "a Vector3 location argument is read per axis");
+check($vectorAxis->invoke(null, [1, 2, 3], "z") === 3.0, "three plain numbers are read per axis");
+check($vectorAxis->invoke(null, [], "x") === 0.0, "a missing location falls back to 0");
 
 $eventRow = null;
 foreach($rowsFor116 as $row){
@@ -453,6 +471,18 @@ $bridge->broadcasts = [];
 $scriptManager->evalScript("bridgeCall('world.notARealPath', []).then(() => world.sendMessage('no-reject')).catch((error) => world.sendMessage('rejected-ok:' + error))");
 pump($scriptManager, 76, 79);
 check(str_contains(broadcastText($bridge->broadcasts), "rejected-ok:"), "an unknown bridge path rejects the promise with the server error");
+
+// 9l) world spawn location bridge (get + set with a Vector3 location)
+$bridge->broadcasts = [];
+$bridge->spawnLocation = ["x" => 0.5, "y" => 64.0, "z" => 0.5];
+$scriptManager->evalScript("world.getDefaultSpawnLocation().then((spawn) => world.sendMessage('spawn:' + spawn.x + ',' + spawn.y + ',' + spawn.z))");
+$scriptManager->evalScript("world.setDefaultSpawnLocation({x: 4, y: 70, z: -9}).then((ok) => world.sendMessage('spawn-set:' + ok))");
+$scriptManager->evalScript("world.setDefaultSpawnLocation(1, 2, 3)");
+pump($scriptManager, 80, 84);
+$spawnText = broadcastText($bridge->broadcasts);
+check(str_contains($spawnText, "spawn:0.5,64,0.5"), "world.getDefaultSpawnLocation() resolves the world spawn");
+check(str_contains($spawnText, "spawn-set:true"), "world.setDefaultSpawnLocation(location) resolves true");
+check($bridge->spawnLocation === ["x" => 1.0, "y" => 2.0, "z" => 3.0], "world.setDefaultSpawnLocation(x, y, z) passes the coordinates to the bridge");
 
 // 10) dynamic properties persist to script_data/dynamic_properties.json
 $scriptManager->evalScript("world.setDynamicProperty('persist-test', 'works')");

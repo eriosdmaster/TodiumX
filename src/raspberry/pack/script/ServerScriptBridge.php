@@ -158,6 +158,28 @@ final class ServerScriptBridge implements ScriptApiBridge{
 		];
 	}
 
+	public function getDefaultSpawnLocation() : ?array{
+		try{
+			$spawn = $this->server->getWorldManager()->getDefaultWorld()->getSpawnPosition();
+		}catch(\Throwable){
+			return null; //no default world
+		}
+
+		return ["x" => $spawn->x, "y" => $spawn->y, "z" => $spawn->z];
+	}
+
+	public function setDefaultSpawnLocation(float $x, float $y, float $z) : bool{
+		try{
+			$world = $this->server->getWorldManager()->getDefaultWorld();
+		}catch(\Throwable){
+			return false;
+		}
+
+		$world->setSpawnPosition(new Vector3($x, $y, $z));
+
+		return true;
+	}
+
 	public function scoreboardOperation(string $method, array $args) : mixed{
 		$scoreboards = $this->getScoreboards();
 

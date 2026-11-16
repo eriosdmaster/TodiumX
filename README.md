@@ -8,4 +8,6 @@ Veja [PLUGINS.md](PLUGINS.md) e `examples/ExamplePlugin/` para APIs de plugins, 
 
 **Novo:** suporte a **Script API** — packs com módulo `script` rodam JavaScript real (`import { world, system } from "@minecraft/server"`) no QuickJS embutido na biblioteca nativa (rquickjs 0.9): eventos before/after (incluindo blocos), timers `system.run*`, dynamic properties, `runCommand`, scriptevents, entidades, teleport, scoreboard e tags — com os comandos `/scriptapi` e `/scriptevent`. A surface é **data-driven** (`ScriptApiRegistry`): o módulo `@minecraft/server` é montado por versão declarada pelo pack e adicionar API nova é uma linha no registro. Veja [SCRIPT_API.md](SCRIPT_API.md).
 
+**Novo:** APIs de plugins ampliadas — `registerCommand()`/`registerPermission()` em PHP (sem `plugin.toml`), `getOnlinePlayers()`, `getPlayer()`, `broadcastMessage()` e integração entre plugins, com `/plugins` (list/enable/disable/reload) e `/setblock`. Veja [PLUGINS.md](PLUGINS.md).
+
 créditos para ByteForge88

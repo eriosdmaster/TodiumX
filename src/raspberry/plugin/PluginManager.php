@@ -5,8 +5,6 @@ declare(strict_types=1);
 namespace raspberry\plugin;
 
 use raspberry\Server;
-use raspberry\command\Command;
-use raspberry\command\CommandParameter;
 use raspberry\command\CommandSender;
 use raspberry\event\Event;
 use raspberry\event\EventPriority;
@@ -29,14 +27,12 @@ use function is_dir;
 use function is_file;
 use function is_string;
 use function is_subclass_of;
-use function preg_split;
 use function scandir;
 use function sort;
 use function spl_object_id;
 use function str_ends_with;
 use function strcasecmp;
 use function strtolower;
-use function trim;
 use function usort;
 
 class PluginManager{
@@ -48,6 +44,8 @@ class PluginManager{
     /** @var array<string, bool> */
     private array $enabled = [];
     private string $pluginsPath;
+    /** @var array<string, string> plugin name => folder, so /plugins reload can load it again */
+    private array $paths = [];
 
     public function __construct(Server $server, string $pluginsPath){
         $this->server = $server;
@@ -76,6 +74,94 @@ class PluginManager{
         return $p !== null && $p->isEnabled();
     }
 
+    /** The folder a loaded plugin was read from, or null when it is not loaded. */
+    public function getPluginPath(string $name) : ?string{
+        $plugin = $this->getPlugin($name);
+        return $plugin === null ? null : ($this->paths[$plugin->getName()] ?? $this->loader->getPluginPath($plugin->getName()));
+    }
+
+    /**
+     * Registers a command implemented in PHP (PluginBase::registerCommand), like a plugin.toml
+     * [[commands]] entry but without the manifest.
+     *
+     * @param list<string> $aliases
+     */
+    public function registerPluginCommand(
+        Plugin $plugin,
+        string $name,
+        string $description,
+        callable $executor,
+        array $aliases = [],
+        ?string $permission = null,
+        ?string $usage = null
+    ) : PluginCommand{
+        $command = new PluginClosureCommand($name, $description, $plugin, \Closure::fromCallable($executor), $usage, $permission, $aliases);
+        $this->server->getCommandMap()->registerCommand($name, $command);
+        $this->server->updateCommands();
+        return $command;
+    }
+
+    /** Removes a command this plugin registered, if it owns it. */
+    public function unregisterPluginCommand(Plugin $plugin, string $name) : void{
+        $command = $this->server->getCommandMap()->getCommand($name);
+        if($command instanceof PluginCommand && $command->getPlugin() === $plugin){
+            $this->server->getCommandMap()->unregisterCommand($command);
+            $this->server->updateCommands();
+        }
+    }
+
+    /** Registers a permission from PHP (PluginBase::registerPermission); existing ones are kept. */
+    public function registerPluginPermission(Plugin $plugin, string $name, string $description = "", string $default = "true") : void{
+        if($this->server->getPermissionManager()->get($name) !== null){
+            return;
+        }
+        $this->server->getPermissionManager()->registerAll([$name => ["description" => $description, "default" => $default]]);
+    }
+
+    /** Takes every command of a plugin out of the command map (reload and disable). */
+    public function unregisterPluginCommands(Plugin $plugin) : void{
+        $removed = false;
+        foreach($this->server->getCommandMap()->getCommands() as $command){
+            if($command instanceof PluginCommand && $command->getPlugin() === $plugin){
+                $this->server->getCommandMap()->unregisterCommand($command);
+                $removed = true;
+            }
+        }
+        if($removed){
+            $this->server->updateCommands();
+        }
+    }
+
+    /** Disables, unloads and loads a plugin again from its folder. */
+    public function reloadPlugin(string $name) : bool{
+        $plugin = $this->getPlugin($name);
+        $path = $plugin === null ? null : $this->getPluginPath($plugin->getName());
+
+        if($plugin === null || $path === null){
+            return false;
+        }
+
+        $wasEnabled = $plugin->isEnabled();
+
+        $this->unregisterPluginCommands($plugin);
+        $this->disablePlugin($plugin);
+        unset($this->plugins[$plugin->getName()]);
+
+        try{
+            $reloaded = $this->loader->loadPlugin($path);
+            $this->plugins[$reloaded->getName()] = $reloaded;
+            $this->paths[$reloaded->getName()] = $path;
+            $this->registerManifestPermissions($reloaded);
+            $this->registerManifestCommands($reloaded);
+            $reloaded->onLoad();
+
+            return $wasEnabled && $this->enablePlugin($reloaded);
+        }catch(Throwable $e){
+            $this->server->getLogger()->error("Failed to reload plugin {$name}: " . $e->getMessage());
+            return false;
+        }
+    }
+
     public function loadPlugins() : void{
         $entries = scandir($this->pluginsPath);
         if($entries === false){
@@ -102,6 +188,7 @@ class PluginManager{
             try{
                 $plugin = $this->loader->loadPlugin($info["path"]);
                 $this->plugins[$plugin->getName()] = $plugin;
+                $this->paths[$plugin->getName()] = $info["path"];
                 $this->registerManifestPermissions($plugin);
                 $this->registerManifestCommands($plugin);
                 $plugin->onLoad();
@@ -129,6 +216,9 @@ class PluginManager{
                 return false;
             }
         }
+        //manifest commands are registered on load and removed on disable, so put them
+        //back before onEnable(); programmatic ones come from onEnable() itself
+        $this->registerManifestCommands($plugin);
         try{
             $plugin->setEnabled(true);
             $plugin->onEnable();
@@ -160,6 +250,7 @@ class PluginManager{
         }catch(Throwable $e){
             $this->server->getLogger()->error("Error disabling plugin {$plugin->getName()}: " . $e->getMessage());
         }
+        $this->unregisterPluginCommands($plugin);
         $plugin->setEnabled(false);
         HandlerList::unregisterAll($plugin);
     }
@@ -245,6 +336,10 @@ class PluginManager{
             if(is_array($info["aliases"] ?? null)){
                 foreach($info["aliases"] as $a){ if(is_string($a)) $aliases[] = $a; }
             }
+            $existing = $this->server->getCommandMap()->getCommand($name);
+            if($existing instanceof PluginCommand && $existing->getPlugin() === $plugin){
+                continue; //already registered (enablePlugin runs after a disable)
+            }
             $cmd = new PluginManifestCommand($name, $desc, $plugin, $usage, $perm, $aliases);
             try{
                 $this->server->getCommandMap()->registerCommand($name, $cmd);
@@ -294,38 +389,23 @@ class PluginManager{
 /**
  * Command registered from plugin.toml. Execution is delegated to the plugin via PluginCommandExecutor if implemented.
  */
-class PluginManifestCommand extends Command{
+class PluginManifestCommand extends PluginCommand{
     public function __construct(
         string $name,
         string $description,
-        private Plugin $plugin,
+        Plugin $plugin,
         ?string $usage = null,
         ?string $permission = null,
         array $aliases = []
     ){
-        // one optional raw-text argument, so plugin commands can take any arguments; onSent() splits it into a list
-        parent::__construct($name, $description, [[CommandParameter::rawText("args", true)]], $aliases);
-        if($usage !== null) $this->setUsage($usage);
-        if($permission !== null) $this->setPermission($permission);
-    }
-
-    /**
-     * @param array<string, mixed> $args
-     */
-    public function onSent(CommandSender $sender, array $args) : void{
-        $raw = isset($args["args"]) && is_string($args["args"]) ? trim($args["args"]) : "";
-        $list = $raw === "" ? [] : preg_split('/\s+/', $raw);
-
-        if(!$this->execute($sender, $list === false ? [] : $list)){
-            $sender->sendMessage("§cUsage: " . $this->getUsage());
-        }
+        parent::__construct($name, $description, $plugin, $usage, $permission, $aliases);
     }
 
     /**
      * @param list<string> $args
      */
     public function execute(CommandSender $sender, array $args) : bool{
-        $plugin = $this->plugin;
+        $plugin = $this->getPlugin();
         if($plugin instanceof PluginCommandExecutor){
             try{
                 return $plugin->onCommand($sender, $this, $this->getName(), $args);
@@ -338,7 +418,5 @@ class PluginManifestCommand extends Command{
         $sender->sendMessage("§eCommand '{$this->getName()}' is registered by {$plugin->getName()} but has no executor.");
         return true;
     }
-
-    public function getPlugin() : Plugin{ return $this->plugin; }
 }
 

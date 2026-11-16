@@ -71,6 +71,20 @@ interface ScriptApiBridge{
 	public function getBlockInfo(int $x, int $y, int $z) : ?array;
 
 	/**
+	 * The spawn point of the default world, as world.getDefaultSpawnLocation()
+	 * does: ["x" => .., "y" => .., "z" => ..], or null without a default world.
+	 *
+	 * @return array{x: float, y: float, z: float}|null
+	 */
+	public function getDefaultSpawnLocation() : ?array;
+
+	/**
+	 * Moves the spawn point of the default world, as
+	 * world.setDefaultSpawnLocation() does. False without a default world.
+	 */
+	public function setDefaultSpawnLocation(float $x, float $y, float $z) : bool;
+
+	/**
 	 * One scoreboard operation, dispatched by path from ScriptManager:
 	 * $method is the vanilla-shaped name (getObjective, addObjective, setScore, …)
 	 * and $args the positional arguments the script passed. The return value

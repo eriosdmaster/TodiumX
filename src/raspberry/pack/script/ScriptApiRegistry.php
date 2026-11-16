@@ -66,6 +66,8 @@ final class ScriptApiRegistry{
 		["path" => "world.getEntity", "since" => "1.16.0", "kind" => self::KIND_BRIDGE],
 		["path" => "world.getEntities", "since" => "1.16.0", "kind" => self::KIND_BRIDGE],
 		["path" => "world.getBlock", "since" => "1.16.0", "kind" => self::KIND_BRIDGE],
+		["path" => "world.getDefaultSpawnLocation", "since" => "1.6.0", "kind" => self::KIND_BRIDGE],
+		["path" => "world.setDefaultSpawnLocation", "since" => "1.6.0", "kind" => self::KIND_BRIDGE],
 
 		// --- world.scoreboard (vanilla shape, backed by ScoreboardsAPI) -------
 		["path" => "world.scoreboard.getObjective", "since" => "1.16.0", "kind" => self::KIND_BRIDGE],

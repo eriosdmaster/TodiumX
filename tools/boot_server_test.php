@@ -11,10 +11,11 @@ declare(strict_types=1);
 
 error_reporting(E_ALL);
 
-const PROJECT = dirname(__DIR__);
+define("PROJECT", dirname(__DIR__));
 
 require PROJECT . "/vendor/autoload.php";
 
+use raspberry\command\ConsoleCommandSender;
 use raspberry\Server;
 
 $failures = 0;
@@ -35,6 +36,8 @@ $dataPath = sys_get_temp_dir() . "/todiumx_e2e_" . getmypid();
 exec("rm -rf " . escapeshellarg($dataPath));
 mkdir($dataPath . "/behavior_packs", 0777, true);
 exec("cp -r " . escapeshellarg(PROJECT . "/behavior_packs/ExampleAddonBP") . " " . escapeshellarg($dataPath . "/behavior_packs/ExampleAddonBP"));
+@mkdir($dataPath . "/plugins", 0777, true);
+exec("cp -r " . escapeshellarg(PROJECT . "/examples/ExamplePlugin") . " " . escapeshellarg($dataPath . "/plugins/ExamplePlugin"));
 file_put_contents($dataPath . "/server.properties", "language=en_US\nserver-name=E2E Test\n");
 
 echo "== booting raspberry\\Server in {$dataPath} ==\n";
@@ -84,6 +87,40 @@ foreach(($creative->items ?? []) as $entry){
     $creativeIds[] = $entry[0]->networkId ?? 0;
 }
 check($rubyRuntimeId !== null && in_array($rubyRuntimeId, $creativeIds, true), "todium:ruby added to the creative content");
+
+echo "== plugins ==\n";
+$pluginManager = $server->getPluginManager();
+$examplePlugin = $pluginManager->getPlugin("ExamplePlugin");
+check($examplePlugin !== null && $examplePlugin->isEnabled(), "ExamplePlugin loaded and enabled from the plugins folder");
+check($server->getCommandMap()->getCommand("hello") !== null, "plugin.toml command registered");
+check($server->getCommandMap()->getCommand("exampleinfo") !== null, "registerCommand() command is in the command map");
+check($server->getPermissionManager()->get("example.info") !== null, "registerPermission() permission is registered");
+
+$sender = new class ($server->getLogger(), $server->getPermissionManager()) extends ConsoleCommandSender{
+    /** @var list<string> */
+    public array $messages = [];
+
+    public function sendMessage(string $message) : void{
+        $this->messages[] = $message;
+    }
+
+    public function collected() : string{
+        return implode("\n", $this->messages);
+    }
+};
+
+$sender->messages = [];
+check($server->dispatchCommand($sender, "plugins list"), "/plugins list runs from the console");
+check(str_contains($sender->collected(), "ExamplePlugin"), "/plugins list shows the loaded plugin");
+
+$sender->messages = [];
+check($server->dispatchCommand($sender, "exampleinfo") && str_contains($sender->collected(), "ExamplePlugin"), "/exampleinfo answers from the plugin closure");
+
+$sender->messages = [];
+check($server->dispatchCommand($sender, "setblock 0 0 0 not_a_block") && str_contains($sender->collected(), "not_a_block"), "/setblock rejects an unknown block");
+
+check($pluginManager->reloadPlugin("ExamplePlugin"), "reloadPlugin() reloads the plugin");
+check($pluginManager->isPluginEnabled("ExamplePlugin") && $server->getCommandMap()->getCommand("exampleinfo") !== null, "the reloaded plugin keeps its commands registered");
 
 echo "\n";
 if($failures === 0){

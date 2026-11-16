@@ -16,6 +16,7 @@ use function intdiv;
 use function is_array;
 use function is_float;
 use function is_int;
+use function is_numeric;
 use function is_string;
 use function json_encode;
 use function preg_match;
@@ -422,6 +423,12 @@ final class ScriptManager{
 				$path === "world.getEntity" => $this->bridge->getEntityById(self::intArg($args, 0)),
 				$path === "world.getEntities" => $this->bridge->getEntities(),
 				$path === "world.getBlock" => $this->bridge->getBlockInfo(self::intArg($args, 0), self::intArg($args, 1), self::intArg($args, 2)),
+				$path === "world.getDefaultSpawnLocation" => $this->bridge->getDefaultSpawnLocation(),
+				$path === "world.setDefaultSpawnLocation" => $this->bridge->setDefaultSpawnLocation(
+					self::vectorAxis($args, "x"),
+					self::vectorAxis($args, "y"),
+					self::vectorAxis($args, "z")
+				),
 				$path === "player.teleport" => $this->bridge->teleportEntity(
 					self::intArg($args, 0),
 					self::floatArg($args, 1),
@@ -450,6 +457,24 @@ final class ScriptManager{
 		$value = $args[$index] ?? 0;
 
 		return is_int($value) || is_float($value) ? (float) $value : 0.0;
+	}
+
+	/**
+	 * The $axis of {"x": .., "y": .., "z": ..} in $args[0] (how the shim sends a
+	 * Vector3 location), or of the three plain numbers in $args.
+	 */
+	private static function vectorAxis(array $args, string $axis) : float{
+		$vector = $args[0] ?? null;
+
+		if(is_array($vector) && is_numeric($vector[$axis] ?? null)){
+			return (float) $vector[$axis];
+		}
+
+		return self::floatArg($args, match($axis){
+			"x" => 0,
+			"y" => 1,
+			default => 2
+		});
 	}
 
 	private function executeScriptCommand(int $reqId, string $commandLine, string $source) : void{

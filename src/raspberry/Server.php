@@ -102,7 +102,9 @@ use raspberry\command\defaults\HelpCommand;
 use raspberry\command\defaults\KickCommand;
 use raspberry\command\defaults\ListCommand;
 use raspberry\command\defaults\OpCommand;
+use raspberry\command\defaults\PluginsCommand;
 use raspberry\command\defaults\SaveAllCommand;
+use raspberry\command\defaults\SetBlockCommand;
 use raspberry\command\defaults\SetWorldSpawnCommand;
 use raspberry\command\defaults\SpawnpointCommand;
 use raspberry\command\defaults\TeleportCommand;
@@ -1141,6 +1143,7 @@ class Server{
             "deop" => "op",
             "gamemode" => "op",
             "teleport" => "op",
+            "setblock" => "op",
             "setworldspawn" => "op",
             "spawnpoint" => "op",
             "give" => "op",
@@ -1150,6 +1153,7 @@ class Server{
             "function" => "op",
             "scriptapi" => "op",
             "scriptevent" => "op",
+            "plugins" => "op",
             "save-all" => "op",
             "stop" => "op"
         ] as $command => $default){
@@ -1174,6 +1178,7 @@ class Server{
             new DeopCommand(),
             new GamemodeCommand(),
             new TeleportCommand(),
+            new SetBlockCommand(),
             new SetWorldSpawnCommand(),
             new SpawnpointCommand(),
             new GiveCommand(),
@@ -1183,6 +1188,7 @@ class Server{
             new FunctionCommand(),
             new ScriptApiCommand(),
             new ScriptEventCommand(),
+            new PluginsCommand(),
             new SaveAllCommand(),
             new StopCommand(),
             new VersionCommand()

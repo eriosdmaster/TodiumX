@@ -85,6 +85,8 @@ shim nem no Rust. Ver "Adicionando uma API nova" abaixo.
 | `getEntity(id)` | **Promise** com o snapshot da entidade (jogador ou mob): `{id, name, type, dimension, x, y, z, yaw, pitch, health}`; id desconhecido resolve `null` |
 | `getEntities()` | **Promise** com todos os jogadores e entidades (limite de 500) |
 | `getBlock(x, y, z)` | **Promise** com `{type: "minecraft:stone", location}` do mundo padrão; `null` se o chunk não estiver carregado |
+| `getDefaultSpawnLocation()` | **Promise** com `{x, y, z}` do spawn do mundo padrão; `null` sem mundo padrão |
+| `setDefaultSpawnLocation({x, y, z})` / `setDefaultSpawnLocation(x, y, z)` | **Promise** `boolean`: move o spawn do mundo padrão |
 | `scoreboard.getObjective(name)` / `getObjectives()` | **Promise** com o objetivo (`{display_name, ...}`) ou lista |
 | `scoreboard.addObjective(nome, criteria?, displayName?)` / `removeObjective(nome)` | **Promise** `boolean`; backing real é a `ScoreboardsAPI` do engine |
 | `scoreboard.getScore(objetivo, participante)` / `setScore(obj, part, valor)` / `addScore(obj, part, qtd)` / `removeScore(obj, part)` | **Promise**; participante aceita `"Steve"`, um `Player` ou `{id, name}` — resolve para o nome |

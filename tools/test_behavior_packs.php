@@ -280,9 +280,14 @@ $lang = new Language("en_US");
 check(str_contains($lang->translate("command.behaviorpack.description"), "behavior"), "command.behaviorpack.description");
 check(str_contains($lang->translate("command.function.done", ["function" => "welcome", "count" => 2]), "welcome"), "command.function.done placeholders");
 check(str_contains($lang->translate("behavior.loaded", ["found" => 1, "active" => 1]), "1"), "behavior.loaded placeholders");
+check(str_contains($lang->translate("command.plugins.description"), "plugin"), "command.plugins.description");
+check(str_contains($lang->translate("command.plugins.entry", ["state" => "on", "name" => "ExamplePlugin", "version" => "1.0.0"]), "ExamplePlugin"), "command.plugins.entry placeholders");
+check(str_contains($lang->translate("command.setblock.done", ["block" => "minecraft:stone", "x" => 1, "y" => 2, "z" => 3]), "minecraft:stone"), "command.setblock.done placeholders");
 foreach(["de_DE", "es_ES", "fr_FR"] as $code){
     $other = new Language($code);
     check($other->translate("command.behaviorpack.header") !== "command.behaviorpack.header", "{$code} has the behavior pack keys");
+    check($other->translate("command.plugins.header") !== "command.plugins.header", "{$code} has the plugin command keys");
+    check($other->translate("command.setblock.description") !== "command.setblock.description", "{$code} has the setblock keys");
 }
 
 echo "\n";

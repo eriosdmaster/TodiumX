@@ -38,7 +38,19 @@ class Main extends PluginBase implements Listener, PluginCommandExecutor{
             "width" => 0.7,
             "height" => 1.9,
         ]);
-        $this->getLogger()->info("[ExamplePlugin] enabled. Use /hello");
+        //commands can also be registered from PHP, without a plugin.toml entry
+        $this->registerPermission("example.info", "Allows using /exampleinfo", "true");
+        $this->registerCommand(
+            "exampleinfo",
+            "Shows ExamplePlugin information",
+            function(CommandSender $sender, array $args) : bool{
+                $sender->sendMessage("§aExamplePlugin " . $this->getDescription()->getVersion() . " on " . $this->getServer()->getServerName() . ", players online: " . count($this->getOnlinePlayers()));
+                return true;
+            },
+            ["einfo"],
+            "example.info"
+        );
+        $this->getLogger()->info("[ExamplePlugin] enabled. Use /hello or /exampleinfo");
     }
 
     public function onDisable() : void{

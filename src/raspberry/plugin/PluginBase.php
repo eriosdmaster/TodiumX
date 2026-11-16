@@ -12,6 +12,8 @@ use raspberry\block\BlockState;
 use raspberry\entity\CustomEntity;
 use raspberry\item\Item;
 use raspberry\event\Listener;
+use raspberry\command\CommandSender;
+use raspberry\player\Player;
 
 abstract class PluginBase implements Plugin{
 
@@ -124,5 +126,60 @@ abstract class PluginBase implements Plugin{
 
     final protected function registerEvents(Listener $listener) : void{
         $this->getServer()->getPluginManager()->registerEvents($listener, $this);
+    }
+
+    /**
+     * Registers a command implemented in PHP, without a plugin.toml entry. The executor gets the
+     * sender, the arguments already split and the command; return false to print the usage line.
+     *
+     * @param callable(CommandSender, list<string>, PluginCommand) : mixed $executor
+     * @param list<string>                                                 $aliases
+     */
+    final protected function registerCommand(
+        string $name,
+        string $description,
+        callable $executor,
+        array $aliases = [],
+        ?string $permission = null,
+        ?string $usage = null
+    ) : PluginCommand{
+        return $this->getServer()->getPluginManager()->registerPluginCommand($this, $name, $description, $executor, $aliases, $permission, $usage);
+    }
+
+    final protected function unregisterCommand(string $name) : void{
+        $this->getServer()->getPluginManager()->unregisterPluginCommand($this, $name);
+    }
+
+    /** Registers a permission from PHP; "default" is "true", "op" or "console", like plugin.toml. */
+    final protected function registerPermission(string $name, string $description = "", string $default = "true") : void{
+        $this->getServer()->getPluginManager()->registerPluginPermission($this, $name, $description, $default);
+    }
+
+    /** @return list<Player> */
+    final protected function getOnlinePlayers() : array{
+        return $this->getServer()->getInGamePlayers();
+    }
+
+    final protected function getPlayer(string $name) : ?Player{
+        foreach($this->getServer()->getInGamePlayers() as $player){
+            if(strcasecmp($player->getName(), $name) === 0){
+                return $player;
+            }
+        }
+
+        return null;
+    }
+
+    final protected function broadcastMessage(string $message) : int{
+        return $this->getServer()->broadcastMessage($message);
+    }
+
+    /** Another loaded plugin by name, for optional integrations (see getDescription()->getSoftDepend()). */
+    final protected function getPlugin(string $name) : ?Plugin{
+        return $this->getServer()->getPluginManager()->getPlugin($name);
+    }
+
+    final protected function isPluginEnabled(string $name) : bool{
+        return $this->getServer()->getPluginManager()->isPluginEnabled($name);
     }
 }

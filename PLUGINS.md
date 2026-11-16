@@ -41,6 +41,30 @@ O leitor aceita strings básicas/literais, números, booleanos, arrays, tabelas 
 
 `PluginBase` fornece `getServer()`, `getLogger()`, `getDataFolder()`, `getDescription()`, `registerEvents()` e helpers para mundo, itens, blocos e entidades. O registro de eventos usa `Listener` e `#[EventHandler]`; os eventos básicos são entrada, saída e chat. Comandos TOML chamam `PluginCommandExecutor::onCommand()`.
 
+### Comandos, permissões e jogadores pela API
+
+Além das `[[commands]]` do `plugin.toml`, o plugin pode registrar comandos e permissões em PHP (normalmente em `onEnable()`):
+
+```php
+public function onEnable() : void{
+    $this->registerPermission("meuplugin.info", "Permite usar /info", "true");
+    $this->registerCommand(
+        "info",
+        "Mostra informações do plugin",
+        function(CommandSender $sender, array $args) : bool{
+            $sender->sendMessage("§aOnline: " . count($this->getOnlinePlayers()));
+            return true; // false imprime a linha de uso
+        },
+        ["meuplugininfo"],          // aliases
+        "meuplugin.info",            // permissão
+        "/info"                      // uso
+    );
+    $this->unregisterCommand("info"); // remove quando não precisar mais
+}
+```
+
+Outros helpers: `getOnlinePlayers()`, `getPlayer(nome)`, `broadcastMessage(texto)`, `getPlugin(nome)` e `isPluginEnabled(nome)` para integração opcional entre plugins (veja `softdepend`).
+
 Exemplo de registro em `onEnable()`:
 
 ```php
@@ -66,6 +90,17 @@ $entity = $this->spawnCustomEntity("meuplugin:scout", 0.5, 70, 0.5, $world);
 Itens registrados entram no dicionário de itens e na lista Criativa `Plugin Items`; o ícone usa a textura nomeada no resource pack ativo. Blocos customizados são IDs lógicos associados a um estado vanilla de fallback: a paleta atual do servidor ainda não registra um novo estado Bedrock, então aparência e colisão são as do fallback. `getCustomBlockIdAt()` recupera o ID lógico quando o estado vanilla corresponde a um fallback registrado.
 
 Entidades são spawnadas e movimentadas pelo servidor. O resource pack do cliente precisa fornecer a definição visual associada ao mesmo identificador para mostrar um modelo customizado; sem ela, o cliente pode mostrar uma representação ausente. As opções aceitas são `name`, `max_health` (ou `health`), `speed`, `follow_range`, `follow_players`, `wander`, `width` e `height`.
+
+## Gerenciando plugins em jogo
+
+Com permissão de operador (`raspberry.command.plugins`):
+
+```
+/plugins                         lista os plugins carregados (ativo/inativo e versão)
+/plugins enable NomeDoPlugin     ativa um plugin carregado
+/plugins disable NomeDoPlugin    desativa o plugin e remove os comandos dele
+/plugins reload NomeDoPlugin     recarrega o plugin do disco (onDisable -> onLoad -> onEnable)
+```
 
 ## Resource packs
 
