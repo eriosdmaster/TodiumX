@@ -1,2 +1,5 @@
-item.example:gem.name=Gema de Exemplo
-entity.example:mob.name=Mob de Exemplo
+pack.name=Example Add-On (Recursos)
+pack.description=Texturas e nomes do Example Add-On
+item.todium:ruby.name=Ruby
+tile.todium:ruby_block.name=Bloco de Ruby
+entity.todium:ruby_golem.name=Ruby Golem

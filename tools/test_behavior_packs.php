@@ -259,6 +259,21 @@ check($dictionary->hasItem("todium:ruby") && $dictionary->getRuntimeId("todium:r
 $entryNames = array_column($dictionary->getRegistryEntries(), 0);
 check(in_array("todium:ruby", $entryNames, true), "pack item present in ItemRegistryPacket entries");
 
+echo "== 7b. Pack item components reach the item NBT (modern icon form) ==\n";
+
+$packItem = json_decode((string) file_get_contents(PROJECT . "/behavior_packs/ExampleAddonBP/items/ruby.json"), true);
+$components = raspberry\Server::itemComponents($packItem);
+check(($components["minecraft:icon"] ?? null) === "todium_ruby", "pack item file normalized to its components (modern icon key)");
+
+$serverClass = new ReflectionClass(raspberry\Server::class);
+$server = $serverClass->newInstanceWithoutConstructor();
+$buildNbt = $serverClass->getMethod("buildCustomItemComponentsNbt");
+$nbt = $buildNbt->invoke($server, "todium:ruby", ["minecraft:item" => ["components" => $components]]);
+check(str_contains($nbt, "todium_ruby"), "string minecraft:icon reaches the item NBT");
+check(!str_contains($nbt, "todium.ruby"), "the identifier fallback texture is not used when the icon is set");
+$legacyNbt = $buildNbt->invoke($server, "todium:ruby", ["minecraft:item" => ["components" => ["minecraft:icon" => ["textures" => ["default" => "legacy_icon"]]]]]);
+check(str_contains($legacyNbt, "legacy_icon"), "legacy object icon form still resolves");
+
 echo "== 8. Language keys exist for the new commands ==\n";
 
 $lang = new Language("en_US");

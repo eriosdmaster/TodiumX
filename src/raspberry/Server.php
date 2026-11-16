@@ -488,7 +488,7 @@ class Server{
         if($this->pluginContentRegistry->hasItem($identifier)){
             throw new \InvalidArgumentException("Custom item is already registered: {$identifier}");
         }
-        $components = is_array($definition["components"] ?? null) ? $definition["components"] : $definition;
+        $components = self::itemComponents($definition);
         $definition = ["minecraft:item" => ["description" => ["identifier" => $identifier], "components" => $components]];
         $this->pluginContentRegistry->registerItem($identifier, $components);
         $runtimeId = $this->itemTypeDictionary->registerCustomItem($identifier, true, ItemRegistryPacket::VERSION_DATA_DRIVEN, $this->buildCustomItemComponentsNbt($identifier, $definition));
@@ -546,6 +546,20 @@ class Server{
         return null;
     }
 
+    /**
+     * The components of a custom item definition: accepts a plugin component map,
+     * a {"components": …} wrapper, or a whole behavior pack item file
+     * ({"minecraft:item": {"components": …}}).
+     *
+     * @return array<string, mixed>
+     */
+    public static function itemComponents(array $definition) : array{
+        if(is_array($definition["minecraft:item"]["components"] ?? null)){
+            return $definition["minecraft:item"]["components"];
+        }
+        return is_array($definition["components"] ?? null) ? $definition["components"] : $definition;
+    }
+
     private function buildCustomItemComponentsNbt(string $identifier, array $definition) : string{
         $nbt = new \raspberry\network\mcpe\serializer\NetworkNbtWriter();
         $item = $definition["minecraft:item"] ?? [];
@@ -554,15 +568,22 @@ class Server{
         if(!is_int($stackSize) || $stackSize < 1 || $stackSize > 99){
             $stackSize = 64;
         }
-        $icon = $definitionComponents["minecraft:icon"] ?? [];
-        $texture = is_array($icon) ? ($icon["texture"] ?? null) : null;
-        if(!is_string($texture) && is_array($icon["textures"] ?? null)){
-            $texture = $icon["textures"]["default"] ?? null;
+        //minecraft:icon accepts the modern string form ("todium_ruby") and the older
+        //object forms ({"texture": ...} and {"textures": {"default": ...}})
+        $icon = $definitionComponents["minecraft:icon"] ?? null;
+        $texture = null;
+        if(is_string($icon)){
+            $texture = $icon;
+        }elseif(is_array($icon)){
+            $texture = $icon["texture"] ?? null;
+            if(!is_string($texture) && is_array($icon["textures"] ?? null)){
+                $texture = $icon["textures"]["default"] ?? null;
+            }
         }
         if(!is_string($texture) || $texture === ""){
             $texture = str_replace(":", ".", $identifier);
         }
-        $displayName = $definitionComponents["minecraft:display_name"]["value"] ?? $identifier;
+        $displayName = is_array($definitionComponents["minecraft:display_name"] ?? null) ? ($definitionComponents["minecraft:display_name"]["value"] ?? $identifier) : $identifier;
         if(!is_string($displayName) || $displayName === ""){
             $displayName = $identifier;
         }

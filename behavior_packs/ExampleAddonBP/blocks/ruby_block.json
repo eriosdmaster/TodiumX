@@ -1,5 +1,5 @@
 {
-    "format_version": "1.21.0",
+    "format_version": "1.21.40",
     "minecraft:block": {
         "description": {
             "identifier": "todium:ruby_block",
@@ -8,6 +8,12 @@
             }
         },
         "components": {
+            "minecraft:material_instances": {
+                "*": {
+                    "texture": "todium_ruby_block",
+                    "render_method": "opaque"
+                }
+            },
             "minecraft:destructible_by_mining": {
                 "seconds_to_destroy": 2.5
             },

@@ -13,6 +13,7 @@ use ZipArchive;
 use function array_keys;
 use function class_exists;
 use function count;
+use function explode;
 use function file_get_contents;
 use function is_array;
 use function is_dir;
@@ -225,6 +226,9 @@ final class BehaviorPack{
             $prefix = strtolower($category) . "/";
             $files = [];
             foreach($relativePaths as $relative){
+                if(self::isHiddenPath($relative)){
+                    continue; //.trashed-*, .DS_Store and other hidden leftovers are not content
+                }
                 if(str_starts_with(strtolower($relative), $prefix)){
                     $files[] = $relative;
                 }
@@ -233,6 +237,19 @@ final class BehaviorPack{
             $index[$category] = $files;
         }
         return $index;
+    }
+
+    /**
+     * True when any segment of a relative path starts with a dot (".trashed-…",
+     * ".DS_Store", ".git/…"): those are never pack content.
+     */
+    private static function isHiddenPath(string $relative) : bool{
+        foreach(explode("/", $relative) as $segment){
+            if($segment !== "" && $segment[0] === "."){
+                return true;
+            }
+        }
+        return false;
     }
 
     public function getPath() : string{
@@ -337,7 +354,7 @@ final class BehaviorPack{
             $root = $this->archiveRoot ?? "";
             foreach(self::listArchive($this->archivePath) as $name){
                 $relative = $root === "" ? $name : (str_starts_with(strtolower($name), strtolower($root)) ? substr($name, strlen($root)) : null);
-                if($relative === null || $relative === ""){
+                if($relative === null || $relative === "" || self::isHiddenPath($relative)){
                     continue;
                 }
                 if($prefix === "" || str_starts_with(strtolower($relative), $prefix)){
@@ -357,6 +374,9 @@ final class BehaviorPack{
                     continue;
                 }
                 $relative = str_replace("\\", "/", substr($pathname, strlen($this->path) + 1));
+                if(self::isHiddenPath($relative)){
+                    continue;
+                }
                 if($prefix === "" || str_starts_with(strtolower($relative), $prefix)){
                     $files[] = $relative;
                 }

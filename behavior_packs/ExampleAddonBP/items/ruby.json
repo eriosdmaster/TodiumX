@@ -1,5 +1,5 @@
 {
-    "format_version": "1.21.0",
+    "format_version": "1.21.40",
     "minecraft:item": {
         "description": {
             "identifier": "todium:ruby",
@@ -8,11 +8,7 @@
             }
         },
         "components": {
-            "minecraft:icon": {
-                "textures": {
-                    "default": "todium_ruby"
-                }
-            },
+            "minecraft:icon": "todium_ruby",
             "minecraft:display_name": {
                 "value": "Ruby"
             },

@@ -5,7 +5,7 @@
         "name": "Example Add-On (Behavior)",
         "uuid": "4b8f1c2d-9a3e-4d7a-b1c6-2f5e8d0a9b31",
         "version": [1, 0, 0],
-        "min_engine_version": [1, 20, 0]
+        "min_engine_version": [1, 21, 0]
     },
     "modules": [
         {
